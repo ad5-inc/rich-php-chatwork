@@ -130,6 +130,7 @@ final class Reporter
             ...$this->origin(),
             '利用者: ' . ($this->user() ?? '（未ログイン）'),
             ...Details::lines($e),
+            ...$this->message($e),
         ];
 
         $snippet = new Snippet($this->source)->of($e);
@@ -137,6 +138,22 @@ final class Reporter
         return '[info][title]' . $this->title() . '[/title]' . implode("\n", $lines)
             . ($snippet === null ? '' : "\n[code]{$snippet}[/code]")
             . "\n[code]" . new Trace($this->source)->of($e) . '[/code][/info]';
+    }
+
+    /**
+     * 設定 send_message が true のときだけ、例外の文言をそのまま（長さだけ切って）添える
+     *
+     * @return list<string>
+     */
+    private function message(Throwable $e): array
+    {
+        if ($this->config->get('rich-chatwork.send_message') !== true || $e->getMessage() === '') {
+            return [];
+        }
+
+        $max = $this->config->get('rich-chatwork.message_max_length');
+
+        return ['文言: ' . mb_strimwidth($e->getMessage(), 0, is_int($max) && $max > 0 ? $max : 1000, '…')];
     }
 
     public function throttleKey(Throwable $e): string

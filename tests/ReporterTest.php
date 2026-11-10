@@ -82,6 +82,19 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
+    public function 設定で選べば例外の文言をそのまま添え_長い文言は切る(): void
+    {
+        config(['rich-chatwork.send_message' => true, 'rich-chatwork.message_max_length' => 20]);
+
+        $short = $this->reporter()->body($this->failWithMessage('鍵のファイルが無い'));
+        $long = $this->reporter()->body($this->failWithMessage(str_repeat('あ', 30)));
+
+        $this->assertStringContainsString("文言: 鍵のファイルが無い\n", $short);
+        $this->assertMatchesRegularExpression('/^文言: あ+…$/mu', $long);
+        $this->assertStringNotContainsString(str_repeat('あ', 30), $long);
+    }
+
+    #[Test]
     public function バッチではリクエストの代わりにコマンドを書く(): void
     {
         Context::add('command', 'report:daily');
@@ -299,6 +312,11 @@ final class ReporterTest extends TestCase
     private function failDeep(int $depth): RuntimeException
     {
         return $depth === 0 ? new RuntimeException('probe') : $this->failDeep($depth - 1);
+    }
+
+    private function failWithMessage(string $message): RuntimeException
+    {
+        return new RuntimeException($message);
     }
 
     /**

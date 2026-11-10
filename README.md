@@ -41,6 +41,9 @@ REPORT_CHATWORK_ROOM_ID=
 | `environments` | `null` | 送る環境の一覧。null ならどこでも |
 | `silent_environments` | `['testing', 'local']` | 送り先があっても送らない環境 |
 | `log_when_silent` | `false` | 送らない環境で、送る中身をログ（info）に書く |
+| `timeout_seconds` | `3` | Chatwork に送るときに待つ秒数 |
+| `send_message` | `false` | 例外の文言をそのまま送る。個人情報が入りうるので、送り先の部屋に入る人が見てよいと決めたときだけ `true` にする |
+| `message_max_length` | `1000` | 文言を送るときの長さの上限（文字数） |
 | `throttle_seconds` | `60` | 同じ例外（クラスとファイル:行が同じ）を送り直すまでの秒数 |
 | `cache_store` | `null`（既定のキャッシュ） | 間引きの印を置くキャッシュ |
 | `context` | `request_id`・`request`・`command` | Request ID・リクエスト・コマンドを読む Context のキー |
@@ -74,7 +77,7 @@ app(\Ad5\RichPhpChatwork\Reporter::class)->notice('ログインの失敗が多�
 
 ## 送らないもの
 
-- 例外の文言。DB の例外は値を埋めた SQL を、メールの失敗は宛先を含むなど、個人情報が入りうる
+- 例外の文言（既定）。DB の例外は値を埋めた SQL を、メールの失敗は宛先を含むなど、個人情報が入りうる。設定 `send_message` で送るようにもできる
 - 道筋の引数の値（`getTraceAsString()` は php.ini しだいで引数の値を含むので使わない）
 
 中身はアプリのログを Request ID で引いて見る。
@@ -94,7 +97,7 @@ app(\Ad5\RichPhpChatwork\Reporter::class)->notice('ログインの失敗が多�
 
 ## 気をつけること
 
-- **Chatwork が応答しないと止まる**: ad5jp/php-chatwork はタイムアウトを指定できない。送る処理を差し替えるときは `Ad5\RichPhpChatwork\Transport` を実装してコンテナに登録する
+- **送るときのタイムアウト**: ad5jp/php-chatwork はタイムアウトを指定できないので、送るところだけを部品の中で書き直し、`timeout_seconds`（既定 3 秒）で切っている。送る処理を差し替えるときは `Ad5\RichPhpChatwork\Transport` を実装してコンテナに登録する
 - **PHP 8.5 で非推奨の警告**: ad5jp/php-chatwork のコンストラクタ（暗黙の nullable）が、読み込むたびに deprecation を出す
 - **DB の障害を知らせたいとき**: 既定のキャッシュが database だと、DB が落ちたときに間引きの印を置けない。そのときはプロセスの中だけで間引くので、`cache_store` を `file` か `redis` にしておくとよい
 

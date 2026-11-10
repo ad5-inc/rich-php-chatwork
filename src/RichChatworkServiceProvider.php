@@ -16,7 +16,11 @@ final class RichChatworkServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/rich-chatwork.php', 'rich-chatwork');
 
-        $this->app->bindIf(Transport::class, PhpChatworkTransport::class, true);
+        $this->app->bindIf(Transport::class, static function (Application $app): Transport {
+            $seconds = $app->make('config')->get('rich-chatwork.timeout_seconds');
+
+            return new PhpChatworkTransport(is_int($seconds) || is_float($seconds) ? (float) $seconds : 3.0);
+        }, true);
         $this->app->bindIf(Source::class, static fn (Application $app): Source => new Source($app->basePath()), true);
         $this->app->singleton(Reporter::class, static fn (Application $app): Reporter => new Reporter(
             $app,
