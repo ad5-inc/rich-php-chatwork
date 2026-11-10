@@ -1,0 +1,14 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 10
+    paths:
+        - src
+        - config
+        - tests
+    ignoreErrors:
+        # 部品の設定ファイルは、アプリの config/ に公開される（または mergeConfigFrom で読まれる）ので env() でよい
+        -
+            identifier: larastan.noEnvCallsOutsideOfConfig
+            path: config/rich-chatwork.php
