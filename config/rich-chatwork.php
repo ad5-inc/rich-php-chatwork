@@ -22,6 +22,12 @@ return [
     // 同じ例外（クラスとファイル:行が同じ）を送り直すまでの秒数
     'throttle_seconds' => 60,
 
+    // 例外ではない知らせ（Reporter::notice()）の件名の頭。{app}・{env} は件名と同じ。続けて notice() の $title が付く
+    'notice_title' => '{app}（{env}）',
+
+    // 同じ知らせ（notice() の $throttleKey が同じ）を送り直すまでの秒数
+    'notice_throttle_seconds' => 3600,
+
     // 間引きの印を置くキャッシュ。null なら既定。DB の障害を知らせたいなら file か redis にする
     'cache_store' => null,
 

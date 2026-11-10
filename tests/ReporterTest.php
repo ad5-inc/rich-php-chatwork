@@ -168,6 +168,40 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
+    public function 例外ではない知らせは_同じキーなら間を置くまで1回だけ送る(): void
+    {
+        $this->reporter()->notice('ログインの失敗が多い', ['同じ ID で 20 回', '最後の IP: 203.0.113.10'], 'signin:probe');
+        $this->reporter()->notice('ログインの失敗が多い', ['同じ ID で 21 回'], 'signin:probe');
+        $this->reporter()->notice('ログインの失敗が多い', ['別の ID'], 'signin:other');
+
+        $this->assertCount(2, $this->transport->sent);
+        $this->assertSame("[info][title]Probe（production）ログインの失敗が多い[/title]同じ ID で 20 回\n最後の IP: 203.0.113.10[/info]", $this->transport->sent[0]['body']);
+
+        $this->travel(3601)->seconds();
+        $this->reporter()->notice('ログインの失敗が多い', ['同じ ID で 22 回'], 'signin:probe');
+
+        $this->assertCount(3, $this->transport->sent);
+    }
+
+    #[Test]
+    public function 例外ではない知らせも_送らない環境と送り先が無いときは送らず_送れなくても投げない(): void
+    {
+        $this->useEnvironment('local');
+        $this->reporter()->notice('probe', ['probe'], 'a');
+
+        $this->useEnvironment('production');
+        config(['rich-chatwork.room_id' => null]);
+        $this->reporter()->notice('probe', ['probe'], 'b');
+        $this->assertSame([], $this->transport->sent);
+
+        config(['rich-chatwork.room_id' => '12345']);
+        $this->transport->fail = true;
+        $logged = $this->listenLog();
+        $this->reporter()->notice('probe', ['probe'], 'c');
+        $this->assertContains('知らせを Chatwork に送れなかった', $logged->messages);
+    }
+
+    #[Test]
     public function 記録する例外はハンドラーから送られる(): void
     {
         report(new RuntimeException('probe'));

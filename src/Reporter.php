@@ -76,7 +76,7 @@ final class Reporter
                 return;
             }
 
-            if (! $this->acquire($this->throttleKey($e))) {
+            if (! $this->acquire($this->throttleKey($e), $this->throttleSeconds())) {
                 return;
             }
 
@@ -86,6 +86,37 @@ final class Reporter
                 Log::warning('例外を Chatwork に送れなかった', ['exception' => $e::class, 'error' => $sendError::class]);
             } catch (Throwable) {
                 // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
+            }
+        }
+    }
+
+    /**
+     * 例外ではない知らせ（不自然に多いログインの失敗など）を、例外と同じ部屋に送る。同じ $throttleKey は notice_throttle_seconds に 1 回だけ
+     *
+     * 送る条件（送り先・環境）は report() と同じ。送れなくても投げない
+     *
+     * @param list<string> $lines 本文の行。値をそのまま送るので、個人情報・秘密を入れない
+     */
+    public function notice(string $title, array $lines, string $throttleKey): void
+    {
+        try {
+            $token = $this->string('access_token');
+            $room = $this->string('room_id');
+            if ($token === '' || $room === '' || ! $this->environmentAllows()) {
+                return;
+            }
+
+            $seconds = $this->config->get('rich-chatwork.notice_throttle_seconds');
+            if (! $this->acquire('rich-chatwork-notice:' . sha1($throttleKey), is_int($seconds) && $seconds > 0 ? $seconds : 3600)) {
+                return;
+            }
+
+            $this->transport->send($token, $room, '[info][title]' . $this->expand('notice_title', '{app}（{env}）') . $title . '[/title]' . implode("\n", $lines) . '[/info]');
+        } catch (Throwable $sendError) {
+            try {
+                Log::warning('知らせを Chatwork に送れなかった', ['title' => $title, 'error' => $sendError::class]);
+            } catch (Throwable) {
+                // ログにも書けないなら諦める
             }
         }
     }
@@ -126,13 +157,18 @@ final class Reporter
         return ! is_array($only) || in_array($environment, $only, true);
     }
 
+    private function throttleSeconds(): int
+    {
+        $seconds = $this->config->get('rich-chatwork.throttle_seconds');
+
+        return is_int($seconds) && $seconds > 0 ? $seconds : 60;
+    }
+
     /**
      * 間引きの印を置けたら true。キャッシュが使えないときは、このプロセスの中だけで間引く
      */
-    private function acquire(string $key): bool
+    private function acquire(string $key, int $seconds): bool
     {
-        $seconds = $this->config->get('rich-chatwork.throttle_seconds');
-        $seconds = is_int($seconds) && $seconds > 0 ? $seconds : 60;
         $store = $this->config->get('rich-chatwork.cache_store');
 
         try {
@@ -150,13 +186,21 @@ final class Reporter
 
     private function title(): string
     {
-        $title = $this->config->get('rich-chatwork.title');
+        return $this->expand('title', '{app}（{env}）にて例外発生');
+    }
+
+    /**
+     * 設定の文字の {app}・{env} を、app.name と APP_ENV に置き換える
+     */
+    private function expand(string $key, string $default): string
+    {
+        $template = $this->config->get("rich-chatwork.{$key}");
         $app = $this->config->get('app.name');
 
         return str_replace(
             ['{app}', '{env}'],
             [is_string($app) ? $app : '', $this->app->environment()],
-            is_string($title) ? $title : '{app}（{env}）にて例外発生',
+            is_string($template) ? $template : $default,
         );
     }
 

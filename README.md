@@ -44,6 +44,8 @@ REPORT_CHATWORK_ROOM_ID=
 | `throttle_seconds` | `60` | 同じ例外（クラスとファイル:行が同じ）を送り直すまでの秒数 |
 | `cache_store` | `null`（既定のキャッシュ） | 間引きの印を置くキャッシュ |
 | `context` | `request_id`・`request`・`command` | Request ID・リクエスト・コマンドを読む Context のキー |
+| `notice_title` | `{app}（{env}）` | 例外ではない知らせの件名の頭。続けて `notice()` の件名が付く |
+| `notice_throttle_seconds` | `3600` | 同じ知らせ（`notice()` のキーが同じ）を送り直すまでの秒数 |
 
 利用者の出し方は、AppServiceProvider などで関数を渡して変える。既定は、既定のガードで照合が済んだ利用者の ID。
 
@@ -54,6 +56,14 @@ Reporter::resolveUserUsing(fn (): ?string => auth('staff')->hasUser() ? 'スタ�
 ```
 
 Request ID とリクエストは、入口のミドルウェアで `Context::add('request_id', …)`・`Context::add('request', 'GET /path')` のように文字で入れておく。バッチはコマンドの始まりで `Context::add('command', …)`。
+
+## 例外ではない知らせ
+
+不自然に多いログインの失敗など、例外ではないことも同じ部屋に送れる。送る条件は例外の知らせと同じで、同じキーは `notice_throttle_seconds` に 1 回だけ送る。行はそのまま送るので、個人情報や秘密を入れない。
+
+```php
+app(\Ad5\RichPhpChatwork\Reporter::class)->notice('ログインの失敗が多い', ['同じ ID で 20 回'], 'signin:' . $key);
+```
 
 ## 送るもの
 
