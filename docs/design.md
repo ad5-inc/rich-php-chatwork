@@ -72,11 +72,12 @@ flowchart TD
 | `Reporter` | 入口。送るかの判断・間引き・上限・組み立て・送る・失敗したときの動き |
 | `Chain` | previous のつながり。主に見る例外・包んだもの・原因・包んだビュー |
 | `Details` / `Kind` | 例外の種類ごとの、値を含まない部分（件名の要約と項目） |
-| `KnownMessage` | 形の分かる例外（DB・HTTP クライアント）の文言を組み立て直す |
+| `KnownMessage` | 形の分かる例外（DB・HTTP クライアント・プロセス）の文言を組み立て直す |
 | `DriverMessage` | DB のドライバーの文言の許可リスト |
 | `Redactor` | 伏せる規則（文言・notice・前後のコード・リクエスト） |
 | `Text` | 値の通し方（直す・逃がす・切る）と、失敗を null で返す置き換え |
 | `UrlPath` | URL のパスの段の許可リスト（組み立て直す HTTP の文言と、文言の中の URL で共有） |
+| `ProcessFailure` | プロセスの例外の終了コード・時間切れの秒数（コマンドラインは使わない） |
 | `Names` | クラス名・関数名の整形（匿名クラス・クロージャのパス、件名の短い名前） |
 | `Source` / `AppLine` | アプリのパスの見分け（vendor・コンパイル済みのビュー）、アプリの行 |
 | `Snippet` | 前後のコード |
@@ -137,7 +138,7 @@ JobAttempted    process() の finally で出る。ワーカーでは report() �
 report()        ワーカーは Worker::runJob() で、process() の後に呼ぶ。Context はジョブの ID のまま
                 sync は呼び出し側（HTTP など）で呼ぶ。結び付けた入口でジョブの行を出す
 Looping         ワーカーの次の周の頭。失敗したまま戻していないジョブを戻す（WorkerStopping でも）
-入口の終わり    コンソールの一番外の CommandFinished（CommandStarting と数えた深さで見分ける。HTTP の中の Artisan::call では戻さない）・RequestHandled・アプリの terminating。sync で残したジョブの ID を戻す
+入口の終わり    コンソールの一番外の CommandFinished（CommandStarting と数えた深さで見分ける。HTTP の中の Artisan::call では戻さない。Octane も runningInConsole() が false）・RequestHandled・アプリの terminating。sync で残したジョブの ID を戻す
                 （Context がもう別の値なら触らない）。次のジョブの processing() と settle() でも戻す
 JobProcessed    成功したら戻す
 ```

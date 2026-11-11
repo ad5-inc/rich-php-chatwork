@@ -54,6 +54,7 @@ Request ID: {値}（中身はログをこの番号で引く）
 | スケジュールのコマンドの失敗（素の `Exception`） | `スケジュール report:daily・終了コード 1`。名前が取れなければ `スケジュールのコマンドの失敗・終了コード 1` |
 | `RequestException`・素の Guzzle の `BadResponseException`（`ClientException` など） | `HTTP 503` |
 | `ConnectionException` | `接続できない` |
+| プロセスの例外（Laravel・Symfony） | `コマンドの失敗・終了コード 2`・`コマンドの時間切れ・60 秒`・`コマンドを起動できなかった` |
 | Google の API | `HTTP 403・reason rateLimitExceeded` |
 
 文言から取る物は、種類ごとの形を文言の先頭から末尾まで当て、名前の文字だけを取る。形が合わなければ要約を出さない。

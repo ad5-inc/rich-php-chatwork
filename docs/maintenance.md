@@ -68,6 +68,8 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 | `Illuminate/Database/QueryException.php` | 文言の末尾が ` (Connection: …, SQL: …)`。接続の詳細（Host・Port・Database）が文言に入る。`errorInfo` を previous から写す | 写された文言の規則 1・組み立てが当たらない |
 | `Illuminate/Http/Client/RequestException.php`・`Response.php` | `response->status()`・`effectiveUri()`・`transferStats` | URL が出ず `HTTP {状態}` だけになる |
 | `Illuminate/Http/Client/PendingRequest.php` | `ConnectionException` の previous が Guzzle の例外 | ホストが出ない |
+| `Illuminate/Process/Exceptions/*`・`symfony/process/Exception/*` | 終了コード（`result->exitCode()`・`getProcess()->getExitCode()`）と時間切れの秒数（`getExceededTimeout()`）が取れる。`ProcessStartFailedException` は `ProcessFailedException` を継承する | コマンドの失敗の要約が出ない（コマンドラインは出ない） |
+| `Illuminate/Foundation/Application.php`（`runningInConsole`） | `APP_RUNNING_IN_CONSOLE` の env を SAPI より先に見る（Octane はこれを false にする） | HTTP の中のコマンドの終わりで、残した ID を戻してしまう |
 | `Illuminate/Cache/FileStore.php` | `add()` が flock で排他する（予備の一時フォルダの印） | プロセスをまたいだ間引きが効かない |
 | `Illuminate/Log/Context/ContextLogProcessor.php` | ログに Context（`request_id`）を付ける | ログと知らせの Request ID を揃える前提が崩れる |
 | `Illuminate/Log/Context/Repository.php`（`hydrate`） | JobProcessing で Context を入れ替え、`ContextHydrated` を出す | 戻していない印を捨てるか戻すかの判断がずれる |
