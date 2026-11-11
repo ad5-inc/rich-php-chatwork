@@ -44,6 +44,14 @@ final class RedactorTest extends PlainTestCase
         yield '16 進 32 文字' => ['key ' . self::HEX32 . ' end', 'key （伏せた） end'];
         yield 'base64 のトークン' => ['key ' . self::TOKEN . '== end', 'key （伏せた） end'];
         yield 'session と 16 進 40 文字' => ['file session_' . self::HEX40 . ' end', 'file （伏せた） end'];
+        yield '文の終わりが . のトークン' => ['key is ' . self::TOKEN . '.', 'key is （伏せた）.'];
+        yield '文の終わりが . の 16 進' => ['key is ' . self::HEX32 . '. next', 'key is （伏せた）. next'];
+        yield '電話番号（区切りあり）' => ['電話 03-1234-5678 まで', '電話 （伏せた） まで'];
+        yield '電話番号（区切りなし）' => ['tel:09012345678', 'tel:（伏せた）'];
+        yield 'マイナンバー（区切りあり）' => ['番号 1234 5678 9012 を', '番号 （伏せた） を'];
+        yield 'マイナンバー（区切りなし）' => ['番号 123456789012 を', '番号 （伏せた） を'];
+        yield '口座番号' => ['口座番号: 1234567', '口座番号: （伏せた）'];
+        yield 'account の後ろの 7 桁' => ['bank account no. 7654321 failed', 'bank account no. （伏せた） failed'];
     }
 
     #[Test]
@@ -64,6 +72,8 @@ final class RedactorTest extends PlainTestCase
         yield '長いクラス名' => ['App\UseCase\Actions\Employee\Evaluation\VeryLongActionNameForProbe2024Handler'];
         yield 'UUID' => ['id 123e4567-e89b-12d3-a456-426614174000 end'];
         yield 'パスの区切り' => ['storage/app/' . self::HEX32 . '.pdf'];
+        yield 'SQLSTATE・HTTP の状態・行番号' => ['state 22001 HTTP 503 at line 1234 at row 1'];
+        yield '7 桁でない口座の後ろ' => ['口座の数 12 件'];
         yield 'URL のパス' => ['https://host.example/x'];
         yield '列とキーの名前' => ["for column 'name' and for key 'employees.code'"];
     }
@@ -148,6 +158,7 @@ final class RedactorTest extends PlainTestCase
         $this->assertSame('$h = （伏せた）;', $redactor->snippet('$h = gh' . 'p_' . str_repeat('Probe', 4) . '1234;'));
         $this->assertSame('（伏せた）', $redactor->snippet('-----BEGIN RSA ' . 'PRIVATE KEY-----'));
         $this->assertSame('$password = $request->password;', $redactor->snippet('$password = $request->password;'));
+        $this->assertSame("\$tel = '03-1234-5678';", $redactor->snippet("\$tel = '03-1234-5678';"), '電話番号などは前後のコードに当てない');
         $this->assertSame("\$url = '/api/x?page=1';", $redactor->snippet("\$url = '/api/x?page=1';"), 'URL の問い合わせは当てない');
         $this->assertSame('$id = \'' . self::HEX32 . '\';', $redactor->snippet('$id = \'' . self::HEX32 . '\';'), '長い英数字は当てない');
     }

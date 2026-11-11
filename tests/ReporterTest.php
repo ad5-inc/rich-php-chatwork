@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ad5\RichPhpChatwork\Tests;
 
+use Ad5\RichPhpChatwork\JobEntrance;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Snippet;
 use Ad5\RichPhpChatwork\Trace;
@@ -11,6 +12,7 @@ use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Cache;
@@ -446,6 +448,186 @@ final class ReporterTest extends TestCase
         $this->assertSame(Trace::FRAMES, preg_match_all('/^#\d+ /m', $trace));
         $this->assertStringNotContainsString('vendor/', $trace);
         $this->assertMatchesRegularExpression('/^（以下 \d+ 段はログ）$/m', $trace);
+    }
+
+    #[Test]
+    public function 間引きの時刻はアプリのタイムゾーンで書く(): void
+    {
+        config(['app.timezone' => 'Asia/Tokyo']);
+        $e = new RuntimeException('probe');
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 05:02:00', new \DateTimeZone('UTC')));
+        $this->reporter()->report($e);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 05:02:10', new \DateTimeZone('UTC')));
+        $this->reporter()->report($e);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 05:03:30', new \DateTimeZone('UTC')));
+        $this->reporter()->report($e);
+
+        $this->assertStringContainsString('同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 1 回', $this->transport->sent[1]['body']);
+    }
+
+    #[Test]
+    public function 組み立てに失敗したら_値を含まない最小の知らせを送り_部品の例外を生でログに書く(): void
+    {
+        $logged = $this->listenLog();
+        $reporter = $this->reporterWithBrokenConfig('rich-chatwork.message_max_length');
+
+        $reporter->report($this->failWith(self::SECRET));
+
+        $this->assertSame(['[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]'], array_column($this->transport->sent, 'body'));
+        $index = array_search('例外の知らせを組み立てられなかった', $logged->messages, true);
+        $this->assertIsInt($index);
+        $this->assertInstanceOf(LogicException::class, $logged->contexts[$index]['exception'] ?? null, '部品の例外を、文言と呼び出しの並びが出る形で渡す');
+        $this->assertSame(RuntimeException::class, $logged->contexts[$index]['original'] ?? null);
+        $this->assertSame('req-1', $logged->contexts[$index]['request_id'] ?? null);
+        $this->assertStringNotContainsString('taro', (string) json_encode($logged->contexts));
+    }
+
+    #[Test]
+    public function 間引きのキーを作れなくても_辿らずに作ったキーで最小の知らせを送り間引く(): void
+    {
+        $reporter = $this->reporterWithBrokenConfig('rich-chatwork.wrapper_exceptions');
+        $e = new RuntimeException('probe');
+
+        $reporter->report($e);
+        $reporter->report($e);
+
+        $this->assertCount(1, $this->transport->sent);
+        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]', $this->transport->sent[0]['body']);
+    }
+
+    #[Test]
+    public function 例外ではない知らせも_組み立てに失敗したら最小の知らせを送る(): void
+    {
+        $logged = $this->listenLog();
+        $reporter = $this->reporterWithBrokenConfig('rich-chatwork.message_redact_patterns');
+
+        $reporter->notice('ログインの失敗が多い', ['宛先 ' . self::SECRET], 'signin:probe');
+
+        $this->assertSame(['[info][title]Probe（production）知らせ: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]'], array_column($this->transport->sent, 'body'));
+        $this->assertContains('知らせを組み立てられなかった', $logged->messages);
+    }
+
+    #[Test]
+    public function 送れなかったら_間引きの印を消してすぐ送り直せるようにし_部品の例外を生でログに書く(): void
+    {
+        $logged = $this->listenLog();
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:00:00'));
+        $e = new RuntimeException('probe');
+        $this->reporter()->report($e);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:00:10'));
+        $this->reporter()->report($e);
+        $this->reporter()->report($e);
+
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:01:30'));
+        $this->transport->fail = true;
+        $this->reporter()->report($e);
+        $this->transport->fail = false;
+        $this->reporter()->report($e);
+
+        $this->assertCount(2, $this->transport->sent);
+        $this->assertStringContainsString('同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 2 回', $this->transport->sent[1]['body']);
+        $index = array_search('例外を Chatwork に送れなかった', $logged->messages, true);
+        $this->assertIsInt($index);
+        $this->assertInstanceOf(RuntimeException::class, $logged->contexts[$index]['exception'] ?? null);
+        $this->assertSame('Chatwork is down', ($logged->contexts[$index]['exception'] ?? null)?->getMessage());
+        $this->assertSame(RuntimeException::class, $logged->contexts[$index]['original'] ?? null);
+        $this->assertSame('req-1', $logged->contexts[$index]['request_id'] ?? null);
+    }
+
+    #[Test]
+    public function 全体の上限を超えた分は_次の知らせに多い順3つのクラス名と件数で足す(): void
+    {
+        config(['rich-chatwork.max_per_minute' => 2]);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:00:00'));
+
+        $this->reporter()->report($this->distinct(1));
+        $this->reporter()->report($this->distinct(2));
+        $this->reporter()->report($this->distinct(3));
+        $this->reporter()->report($this->distinctLogic(4));
+        $this->reporter()->report($this->distinctLogic(5));
+        $this->reporter()->report($this->distinctType(6));
+        $this->reporter()->report($this->distinctDomain(7));
+        $this->reporter()->report($this->distinctDomain(8));
+        $this->reporter()->report($this->distinctDomain(9));
+        $this->reporter()->notice('多い', ['probe'], 'over');
+        $this->assertCount(2, $this->transport->sent);
+
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:01:00'));
+        $this->reporter()->report($this->distinct(10));
+
+        $this->assertCount(3, $this->transport->sent);
+        $this->assertStringContainsString("ほかの例外: 8 件（DomainException 3・LogicException 2・RuntimeException 1、上限で送らなかった。ログを見る）\n", $this->transport->sent[2]['body']);
+    }
+
+    #[Test]
+    public function 本番で送り先が空なら_最初の例外で1度だけ警告を書く(): void
+    {
+        config(['rich-chatwork.access_token' => null]);
+        $logged = $this->listenLog();
+
+        $this->reporter()->report(new RuntimeException('probe'));
+        $this->reporter()->report(new LogicException('probe'));
+
+        $this->assertSame(1, count(array_filter($logged->messages, static fn (string $message): bool => str_starts_with($message, 'Chatwork の送り先が空'))));
+
+        $this->useEnvironment('local');
+        $this->app?->forgetInstance(Reporter::class);
+        $quiet = $this->listenLog();
+        $this->reporter()->report(new RuntimeException('probe'));
+        $this->assertSame([], array_filter($quiet->messages, static fn (string $message): bool => str_starts_with($message, 'Chatwork の送り先が空')), '送らない環境では書かない');
+    }
+
+    /**
+     * 設定の 1 つのキーを読むと投げる Reporter（部品の組み立ての失敗を起こす）
+     */
+    private function reporterWithBrokenConfig(string $brokenKey): Reporter
+    {
+        $items = config()->all();
+        $config = new class ($items, $brokenKey) extends ConfigRepository {
+            /**
+             * @param array<string, mixed> $items
+             */
+            public function __construct(array $items, private readonly string $broken)
+            {
+                parent::__construct($items);
+            }
+
+            public function get($key, $default = null): mixed
+            {
+                if ($key === $this->broken) {
+                    throw new LogicException('config is broken');
+                }
+
+                return parent::get($key, $default);
+            }
+        };
+        $app = $this->app ?? $this->fail('アプリが無い');
+
+        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
+    }
+
+    /*
+     * 投げた場所の違う例外（間引きのキーが別になる）
+     */
+
+    private function distinct(int $n): RuntimeException
+    {
+        return self::fabricate(new RuntimeException('probe'), __FILE__, $n, []);
+    }
+
+    private function distinctLogic(int $n): LogicException
+    {
+        return self::fabricate(new LogicException('probe'), __FILE__, $n, []);
+    }
+
+    private function distinctType(int $n): \TypeError
+    {
+        return self::fabricate(new \TypeError('probe'), __FILE__, $n, []);
+    }
+
+    private function distinctDomain(int $n): \DomainException
+    {
+        return self::fabricate(new \DomainException('probe'), __FILE__, $n, []);
     }
 
     private function reporter(): Reporter
