@@ -25,3 +25,5 @@
 ## 代償
 
 `send_message` を true にすると、氏名のような形の無い個人情報は伏せきれずに出る。
+
+> 注記: 後の版で、形の分かる例外に外のコマンド（Laravel・Symfony の Process）の例外も加えた（[redaction.md](../redaction.md#組み立て直す例外)）。
