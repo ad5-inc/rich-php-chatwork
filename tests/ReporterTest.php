@@ -6,6 +6,7 @@ namespace Ad5\RichPhpChatwork\Tests;
 
 use Ad5\RichPhpChatwork\JobEntrance;
 use Ad5\RichPhpChatwork\PhpChatworkTransport;
+use Ad5\RichPhpChatwork\Redactor;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Snippet;
 use Ad5\RichPhpChatwork\Trace;
@@ -64,7 +65,7 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
-    public function 本文に件名と場所と番号を書き_文言と引数の値は書かない(): void
+    public function 本文に件名と文言と場所と番号を書き_文言のメールと引数の値は書かない(): void
     {
         $previous = ini_get('zend.exception_ignore_args');
         // 本番の php.ini しだいで引数が trace に入る。入る設定にしても本文に出ないことを見る
@@ -78,7 +79,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($e);
 
-        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException[/title]アプリの行: ' . $this->relative(__FILE__) . ':', $body);
+        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException[/title][code]送ってはいけない （伏せた）[/code]アプリの行: ' . $this->relative(__FILE__) . ':', $body);
         $this->assertStringContainsString("Request ID: req-1（中身はログをこの番号で引く）\n", $body);
         $this->assertStringContainsString("リクエスト: GET /api/reports/1\n", $body);
         $this->assertStringContainsString(self::class . '->failWith()', $body);
@@ -92,7 +93,6 @@ final class ReporterTest extends TestCase
     #[Test]
     public function 設定で選べば文言を伏せて件名の直下に添え_長い文言は表示幅で切る(): void
     {
-        config(['rich-chatwork.send_message' => true]);
         $short = $this->reporter()->body($this->failWithMessage('鍵 password=probe が無い'));
 
         config(['rich-chatwork.message_max_length' => 20]);
@@ -103,9 +103,16 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
+    public function 設定が無くても_例外に入れた文字列を件名の下に出す(): void
+    {
+        $body = $this->reporter()->body($this->failWithMessage('stg で知らせの形を確かめる'));
+
+        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException[/title][code]stg で知らせの形を確かめる[/code]', $body);
+    }
+
+    #[Test]
     public function 文字を直してから伏せ_逃がしてから切る(): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage("壊れた\xC3\x28文字\x07と\ttab"));
 
@@ -126,11 +133,9 @@ final class ReporterTest extends TestCase
         yield 'serialize の長さのずれ' => ['probe s:8:"password";s:1:"probe-pw-7";', ['probe-pw-7']];
         yield '閉じ括弧の数え方' => ['probe {"token":"]}probe-pw-8"}', ['probe-pw-8']];
         yield '入れ子の JSON' => ['payload {"data":{"secret_value":"probe-pw-9"}}', ['probe-pw-9']];
-        yield 'JSON の配列' => ['payload ["probe-pw-10"]', ['probe-pw-10']];
         yield 'エスケープした JSON' => ['payload "{\"pin\":\"probe-pw-11\"}"', ['probe-pw-11']];
         yield '=> の書き出し' => ["values 'pin' => 'probe-pw-12'", ['probe-pw-12']];
         yield 'URL の角括弧' => ['query a%5Bpin%5D=probe-pw-13', ['probe-pw-13']];
-        yield 'serialize の配列' => ['probe a:1:{i:0;s:11:"probe-pw-15";}', ['probe-pw-15']];
         yield '全角で書いた JSON' => ['payload ｛＂pin＂:＂probe-pw-16＂｝', ['probe-pw-16']];
         yield 'URL エンコードした JSON' => ['body=%7B%22pin%22%3A%22probe-pw-18%22%7D', ['probe-pw-18']];
         yield '1 行目が Array' => ["Array\n(\n    [pin] => probe-pw-19\n)", ['probe-pw-19']];
@@ -144,13 +149,14 @@ final class ReporterTest extends TestCase
      */
     #[Test]
     #[DataProvider('dumps')]
-    public function 値の書き出しの形を含む文言は_伏せずに文言ごと省く(string $message, array $secrets): void
+    public function 値の書き出しの形を含む文言も_省かずに出し_秘密のキーの値は伏せる(string $message, array $secrets): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage($message));
 
-        $this->assertStringContainsString('[/title][code]（値の書き出しを含むので省いた。ログを見る）[/code]アプリの行: ', $body);
+        $this->assertStringContainsString('[/title][code]', $body);
+        $this->assertStringContainsString(Redactor::MARK, $body);
+        $this->assertStringNotContainsString('省いた', $body);
         foreach ($secrets as $secret) {
             $this->assertStringNotContainsString($secret, $body);
         }
@@ -175,13 +181,12 @@ final class ReporterTest extends TestCase
      */
     #[Test]
     #[DataProvider('processCopies')]
-    public function 写したプロセスの文言は_コマンドラインを含むので省く(string $message, array $secrets): void
+    public function 写したプロセスの文言は_文言を残してコマンドラインだけ伏せる(string $message, array $secrets): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage($message));
 
-        $this->assertStringContainsString('[/title][code]（コマンドラインを含むので省いた。ログを見る）[/code]アプリの行: ', $body);
+        $this->assertMatchesRegularExpression('/\\[code\\][^\\[]*"（伏せた）" (failed\\.|exceeded)/i', $body);
         foreach ($secrets as $secret) {
             $this->assertStringNotContainsString($secret, $body);
         }
@@ -203,9 +208,8 @@ final class ReporterTest extends TestCase
 
     #[Test]
     #[DataProvider('sentences')]
-    public function 普通の1行の文は省かない(string $message): void
+    public function 普通の1行の文はそのまま出す(string $message): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage($message));
 
@@ -217,22 +221,21 @@ final class ReporterTest extends TestCase
      */
     public static function multiLine(): iterable
     {
-        yield '2 行目の値' => ["first line\npin probe-pw-14", 'first line'];
+        yield '2 行目の秘密' => ["first line\npin=probe-pw-14", "first line\npin=（伏せた）"];
         yield '末尾の改行' => ["Some message\n", 'Some message'];
-        yield 'Carbon の書式の失敗' => ["Unexpected data found.\nTrailing data", 'Unexpected data found.'];
-        yield 'Symfony Console の名前の誤り' => ["Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily", 'Command "report:dail" is not defined.'];
-        yield 'SMTP の 2 行の応答' => ["Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\r\n550 5.1.1 Please check probe-user@example.test\"", 'Expected response code "250" but got code "550", with message "550-5.1.1 The account does not exist.'];
+        yield 'Carbon の書式の失敗' => ["Unexpected data found.\nTrailing data", "Unexpected data found.\nTrailing data"];
+        yield 'Symfony Console の名前の誤り' => ["Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily", "Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily"];
+        yield 'SMTP の 2 行の応答' => ["Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\r\n550 5.1.1 Please check probe-user@example.test\"", "Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\n550 5.1.1 Please check （伏せた）\""];
     }
 
     #[Test]
     #[DataProvider('multiLine')]
-    public function 目印が改行だけなら_1行目を伏せて出し_2行目から先を省く(string $message, string $first): void
+    public function 複数行の文言も_全部の行を伏せて出す(string $message, string $expected): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage($message));
 
-        $this->assertStringContainsString('[/title][code]' . $first . (rtrim($message) === $first ? '' : '（2 行目から先は省いた）') . '[/code]', $body);
+        $this->assertStringContainsString('[/title][code]' . $expected . '[/code]', $body);
         $this->assertStringNotContainsString('probe-user', $body);
         $this->assertStringNotContainsString('probe-pw', $body);
     }
@@ -249,18 +252,17 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
-    public function noticeの地の文の行でも_写したプロセスの文言は省く(): void
+    public function noticeの地の文の行でも_写したコマンドラインだけ伏せる(): void
     {
         $this->reporter()->notice('バックアップ', ['失敗した: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.'], 'backup');
 
-        $this->assertStringContainsString('[/title]（コマンドラインを含むので省いた。ログを見る）[/info]', $this->transport->sent[0]['body']);
+        $this->assertStringContainsString('[/title]失敗した: The process "（伏せた）" exceeded the timeout of 60 seconds.[/info]', $this->transport->sent[0]['body']);
         $this->assertStringNotContainsString('S3cret', $this->transport->sent[0]['body']);
     }
 
     #[Test]
     public function 空白だけの文言は_空の枠を出さない(): void
     {
-        config(['rich-chatwork.send_message' => true]);
 
         $body = $this->reporter()->body($this->failWithMessage(" \n\t "));
 
@@ -268,17 +270,17 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
-    public function noticeの地の文は行ごとに省き_枠は省かない(): void
+    public function noticeの地の文も枠も省かずに_秘密だけ伏せる(): void
     {
         $this->reporter()->notice('取り込み', ['3 件が失敗', 'payload {"pin":"probe-pw-17"}'], 'dump', "{\"rows\": 3}");
 
-        $this->assertSame("[info][title]Probe（production）知らせ: 取り込み[/title]3 件が失敗\n（値の書き出しを含むので省いた。ログを見る）\n[code]{\"rows\": 3}[/code][/info]", $this->transport->sent[0]['body']);
+        $this->assertSame("[info][title]Probe（production）知らせ: 取り込み[/title]3 件が失敗\npayload {\"pin\":（伏せた）}\n[code]{\"rows\": 3}[/code][/info]", $this->transport->sent[0]['body']);
     }
 
     #[Test]
     public function 伏せる正規表現が失敗したら_項目ごと省く(): void
     {
-        config(['rich-chatwork.send_message' => true, 'rich-chatwork.message_redact_patterns' => ['/(/']]);
+        config(['rich-chatwork.message_redact_patterns' => ['/(/']]);
 
         $this->reporter()->report($this->failWithMessage('社員 P-1234 の更新'));
 
@@ -290,7 +292,6 @@ final class ReporterTest extends TestCase
     #[Test]
     public function 記法を逃がす_枠の外は全部_枠の中は始まりの形だけ(): void
     {
-        config(['rich-chatwork.send_message' => true]);
         Context::add('request', 'GET /[toall]');
 
         $body = $this->reporter()->body($this->failWithMessage("[toall] [To:1] [/info] [/code] ['key'] [\$i] [] [TOALL]"));
@@ -308,7 +309,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($view);
 
-        $this->assertStringStartsWith('[info][title]Probe（production）LogicException[/title]包んだもの: ViewException（ビュー resources/views/a.blade.php）', $body);
+        $this->assertStringStartsWith('[info][title]Probe（production）LogicException[/title][code]probe[/code]包んだもの: ViewException（ビュー resources/views/a.blade.php）', $body);
     }
 
     #[Test]
@@ -464,10 +465,22 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
-    public function 送らない環境では送らず_選べば伏せた本文をログに書く(): void
+    public function 設定ファイルは送り先だけで_送るときは180秒待つ(): void
+    {
+        $this->app?->forgetInstance(\Ad5\RichPhpChatwork\Transport::class);
+        $this->app?->offsetUnset(\Ad5\RichPhpChatwork\Transport::class);
+        $this->app?->register(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class, true);
+
+        $transport = $this->app?->make(\Ad5\RichPhpChatwork\Transport::class);
+        $this->assertInstanceOf(PhpChatworkTransport::class, $transport);
+        $this->assertSame(180.0, new \ReflectionProperty($transport, 'timeout')->getValue($transport));
+        $this->assertSame(require dirname(__DIR__) . '/config/rich-chatwork.php', ['access_token' => null, 'room_id' => null]);
+    }
+
+    #[Test]
+    public function 手元では設定が無くても送らず_伏せた本文をログに書く(): void
     {
         $this->useEnvironment('local');
-        config(['rich-chatwork.log_when_silent' => true, 'rich-chatwork.send_message' => true]);
         $logged = $this->listenLog();
 
         $this->reporter()->report($this->failWithMessage('to ' . self::SECRET));
@@ -1005,7 +1018,7 @@ final class ReporterTest extends TestCase
     #[Test]
     public function 文言が長すぎて落としても超えるなら_文言を詰める(): void
     {
-        config(['rich-chatwork.send_message' => true, 'rich-chatwork.message_max_length' => 100000]);
+        config(['rich-chatwork.message_max_length' => 100000]);
 
         $body = $this->reporter()->body($this->failWithMessage(str_repeat('x', 60000)));
 

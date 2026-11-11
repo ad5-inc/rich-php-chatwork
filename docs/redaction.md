@@ -4,44 +4,34 @@
 
 | 種類 | メッセージ |
 | --- | --- |
-| 形の分かる例外（DB・HTTP クライアント・外のコマンド） | 部品が安全な部品だけで組み立て直す。元の文言は使わない。`send_message` に関係なく送る |
-| それ以外 | `send_message` が true のときだけ、元の文言を伏せて送る |
+| 形の分かる例外（DB・HTTP クライアント・外のコマンド） | 部品が安全な部品だけで組み立て直す。元の文言は使わない |
+| それ以外 | 元の文言を、どんな文言でも省かずに伏せて送る（[0012](decisions/0012-always-send-message.md)） |
 
 伏せた所は固定の「（伏せた）」にする。長さ・頭の文字・ドメインは残さない。
 
-## 値の書き出しを含む文言は省く
+## 文言は省かない
 
-形の分からない例外の文言と notice の地の文の行は、値の書き出しの形を含むなら、伏せずに丸ごと「（値の書き出しを含むので省いた。ログを見る）」にする（[0011](decisions/0011-omit-dumps.md)）。判定は文字を直し全角を揃えた後、伏せる前。
+形の分からない例外の文言と notice の行・枠は、どんな形でも省かずに出し、下の規則で値だけを伏せる（[0012](decisions/0012-always-send-message.md)。以前は値の書き出しを含む文言を丸ごと省いていた）。
 
-| 目印 | 何の書き出しか |
-| --- | --- |
-| 改行 | 複数行（print_r・var_export・JSON_PRETTY_PRINT） |
-| `=>` | 配列 |
-| `s:N:"`・`a:N:{`・`O:N:"` | serialize |
-| `Array (`・`… Object (`・`array (`・`::__set_state` | print_r・var_export |
-| `{"`・`["`・`\"` | JSON とエスケープした JSON |
-| `%5B`・`%5D` | http_build_query の角括弧 |
-| `%7B%22`・`%5B%22`・`%22%3A` | URL エンコードした JSON |
+- 値の書き出し（print_r・var_export・serialize・JSON・http_build_query）も、秘密のキーの値を伏せて出す。serialize の protected・private のプロパティ（名前の前に印が付く）も、長さを偽った値も伏せる
+- 複数行の文言は全部の行を出す
+- 写したプロセスの文言（`The command "…" failed.`・`The process "…" exceeded the timeout`・`… exceeded the idle timeout`。大文字小文字を区別しない）は、引用符の中のコマンドラインだけを「（伏せた）」にする。コマンドラインに `-p` の後ろのパスワードなどが入るため。`The command "report:dailyy" does not exist.` のような artisan の文言は、この形に当たらないので伏せない
 
-写したプロセスの文言（`The command "…" failed.`・`The process "…" exceeded the timeout`・`… exceeded the idle timeout`。Laravel・Symfony の Process の失敗・時間切れ・起動の失敗の形。大文字小文字を区別しない）を文言のどこかに含むなら、別の理由で丸ごと「（コマンドラインを含むので省いた。ログを見る）」にする。コマンドラインに `-p` の後ろのパスワードなどが入るため。`The command "report:dailyy" does not exist.` のような artisan の文言は、この形に当たらないので省かない。
-
-当たった目印が改行だけで、1 行目が書き出しの頭（`{`・`[`・`(` で始まる・終わる、`Array`・`array`・`Object` で終わる）でもなければ、1 行目だけを下の規則で伏せて出し、「（2 行目から先は省いた）」を添える（Carbon の書式の失敗・Symfony Console の名前の誤り・SMTP の 2 行の応答のように、1 行目で読める文言のため）。notice の行は行ごとの判定なので、この扱いは無い。
-
-省くかどうかは `tests/ReporterTest.php` の表で固定している（省く例: オブジェクトの書き出し・serialize の protected / private・長さのずれ・閉じ括弧の数え方。省かない例: `CSRF token mismatch.`・`Undefined array key "name"`・`Call to undefined method App\X::y()`・`in_array(): …`）。下の伏せる規則は、省かなかった 1 行の文と notice の枠に当てる。
+普通の語のキー（`name` など）の値や、キーの無い値（`["…"]`）は伏せない。
 
 ## 当てる項目
 
 | 項目 | 当てる規則 | 固定しているテスト |
 | --- | --- | --- |
-| メッセージ（形の分からない例外） | 書き出しを含めば省く。省かなければ全角を揃えてから、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
+| メッセージ（形の分からない例外） | 全角を揃えてから、写したコマンドラインと、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
 | メッセージ（形の分かる例外） | 組み立て直す（下の「組み立て直す例外」） | `KnownMessageTest` |
-| notice の地の文の行 | メッセージと同じ（行ごとに省く） | `ReporterTest` |
-| notice の枠（`code`） | 省かずに、メッセージと同じ規則で伏せる（配列の値・serialize・`\uXXXX` の規則はここで効く） | `RedactorTest`・`ReporterTest` |
+| notice の地の文の行 | メッセージと同じ | `ReporterTest` |
+| notice の枠（`code`） | メッセージと同じ | `RedactorTest`・`ReporterTest` |
 | 前後のコード | 規則 2〜5・7、鍵の形、規則 8（値が引用符で始まるときだけ） | `RedactorTest` |
 | リクエスト | 規則 6 だけ | `RedactorTest` |
 | 件名・種類・Request ID・アプリの行・呼び出しの並び | 当てない（値を含まない作りで守る） | `DetailsTest`・`NamesTest` |
 
-`log_when_silent` で書く写しも、伏せた後の本文。サーバーの絶対パス（base path）は相対パスにする（文言・匿名クラス・クロージャの名前の中も）。
+送らない環境（testing・local）でログに書く写しも、伏せた後の本文。サーバーの絶対パス（base path）は相対パスにする（文言・匿名クラス・クロージャの名前の中も）。
 
 ## 規則（当てる順）
 
@@ -58,7 +48,6 @@
 | 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`[password] => （伏せた）`（print_r）・`user[password]=（伏せた）`・`{\"password\":（伏せた）}`（エスケープした JSON）・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）`・`パスワードは （伏せた） です`・`確認コード「（伏せた）」` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
 | 8b | URL のパス。スキームのある URL・`\/` でエスケープした URL・ホストの形で始まる URL（`hooks.slack.com/…`）のパスを、段ごとの許可リスト（英小文字の段と `v1` のような段だけ残し、ほかは `{…}`。組み立て直す HTTP の文言と同じ `UrlPath`）に通す。キーと値の後に当てる（先に `{…}` にすると、引用符の無い値が `}` で止まる）。パスは ASCII の文字だけで、`` ` ``、終わりの `.` `,` `:` `;` `!` `]` は含めない（途中の `]` はパスの中、終わりの `]` は `[https://…]` の閉じ括弧として残す）。段は `/` と `\/` のどちらでも区切り、区切りは元の形で残す。スキームの無い URL は `//`・`\/\/` の直後にも当て、ホストの後ろは `/` と `\/` のどちらも受け、ポートを許す（1 つの `/` の後ろは外す）。`lodash.merge/index.js` のようなファイルのパスにも当たるが、伏せすぎる側として受け入れる | `for https://hooks.slack.com/services/{…}/{…}/{…}`・`file_get_contents(https://discord.com/api/webhooks/{…}/{…})`・`https://api.example.com/v1/users/{…}です` | `https://host.example/x`・`` `POST https://api.example.com/v1/charges` ``・`…/v1/users. Retry` |
 | 9 | 長い英数字 | 32 文字以上の 16 進・base64 のトークン・`session_{40 文字の 16 進}`・文の終わりが `.` のトークン | 長い snake_case・長いクラス名・UUID・`storage/app/{32 文字}.pdf` |
-| 10 | 使う側の `message_redact_patterns` | 当たった所 | — |
 
 ### 規則の細かい当たり方
 
@@ -152,7 +141,7 @@ Laravel の `Process`（`ProcessFailedException`・`ProcessTimedOutException`）
 
 ## 伏せきれない物
 
-- 氏名・住所のような形の無い個人情報。`send_message` を true にするのは、送り先の部屋に入る人が文言を見てよいと決めたときだけ
+- 氏名・住所のような形の無い個人情報と、普通の語のキーの値。送り先の部屋には、文言を見てよい人だけを入れる
 - 形の決まっていない秘密（短いパスワードをキーの無い文に入れたなど）
 - 規則 9 に当たらない短いトークン（32 文字未満）
 

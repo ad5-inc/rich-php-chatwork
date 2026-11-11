@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## 0.5.0（2026-11-11）
+
+例外に入れた文字列を必ず出し、設定を送り先だけにした（[0012](docs/decisions/0012-always-send-message.md)）。
+
+### 変えた物
+
+- 形の分からない例外の文言を、設定なしでいつも出す。値の書き出し（print_r・JSON・serialize など）・複数行の文言も省かず、秘密と形の分かる個人情報の値だけを伏せる
+- 写したプロセスの文言は、文言を残して引用符の中のコマンドラインだけを伏せる
+- notice の地の文の行も省かずに伏せるだけにした
+- 送らない環境（testing・local）では、送る中身をいつもログに書く
+- 送るときに待つ秒数を 3 秒から 180 秒にした
+- 間引きの印の置き場を、Laravel の既定のキャッシュからファイル（`file`）にした。testing の環境ではテストごとに消える `array`
+- 伏せる規則: `pin`、serialize の protected・private のプロパティと長さを偽った値、URL エンコードした JSON のキー（`%22`）
+
+### 消した物
+
+- 設定は送り先（`access_token`・`room_id`）だけになった。`send_message` は無くなり、そのほかのキーも README から外した
+
+### 上げるときの注意
+
+- アプリの `config/rich-chatwork.php` を消す。残すと、書いた値で決め打ちの値が上書きされる（`title` の「にて例外発生」、`environments` など）
+- `.env` の `REPORT_CHATWORK_ACCESS_TOKEN`・`REPORT_CHATWORK_ROOM_ID` はそのまま
+- 送り先の部屋には、例外の文言を見てよい人だけを入れる（氏名のような形の無い個人情報は伏せられない）
+- テストで送る形を確かめるときは、testing では送らないので、テストの中で `config(['rich-chatwork.silent_environments' => []])` を入れてから送り先を入れる
+
 ## 0.4.0（2026-11-11）
 
 本文の形を作り直した。秘密と形の分かる個人情報を出さず、届かないことが無いようにした。形の仕様は [docs/message-format.md](docs/message-format.md)、伏せる規則は [docs/redaction.md](docs/redaction.md)。
