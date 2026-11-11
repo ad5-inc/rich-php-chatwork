@@ -9,13 +9,29 @@
 
 伏せた所は固定の「（伏せた）」にする。長さ・頭の文字・ドメインは残さない。
 
+## 値の書き出しを含む文言は省く
+
+形の分からない例外の文言と notice の地の文の行は、値の書き出しの形を含むなら、伏せずに丸ごと「（値の書き出しを含むので省いた。ログを見る）」にする（[0011](decisions/0011-omit-dumps.md)）。判定は文字を直し全角を揃えた後、伏せる前。
+
+| 目印 | 何の書き出しか |
+| --- | --- |
+| 改行 | 複数行（print_r・var_export・JSON_PRETTY_PRINT） |
+| `=>` | 配列 |
+| `s:N:"`・`a:N:{`・`O:N:"` | serialize |
+| `Array (`・`… Object (`・`array (`・`::__set_state` | print_r・var_export |
+| `{"`・`["`・`\"` | JSON とエスケープした JSON |
+| `%5B`・`%5D` | http_build_query の角括弧 |
+
+省くかどうかは `tests/ReporterTest.php` の表で固定している（省く例: オブジェクトの書き出し・serialize の protected / private・長さのずれ・閉じ括弧の数え方。省かない例: `CSRF token mismatch.`・`Undefined array key "name"`・`Call to undefined method App\X::y()`・`in_array(): …`）。下の伏せる規則は、省かなかった 1 行の文と notice の枠に当てる。
+
 ## 当てる項目
 
 | 項目 | 当てる規則 | 固定しているテスト |
 | --- | --- | --- |
-| メッセージ（形の分からない例外） | 全角を揃えてから、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
+| メッセージ（形の分からない例外） | 書き出しを含めば省く。省かなければ全角を揃えてから、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
 | メッセージ（形の分かる例外） | 組み立て直す（下の「組み立て直す例外」） | `KnownMessageTest` |
-| notice の行と枠 | メッセージと同じ | `ReporterTest` |
+| notice の地の文の行 | メッセージと同じ（行ごとに省く） | `ReporterTest` |
+| notice の枠（`code`） | 省かずに、メッセージと同じ規則で伏せる（配列の値・serialize・`\uXXXX` の規則はここで効く） | `RedactorTest`・`ReporterTest` |
 | 前後のコード | 規則 2〜5・7、鍵の形、規則 8（値が引用符で始まるときだけ） | `RedactorTest` |
 | リクエスト | 規則 6 だけ | `RedactorTest` |
 | 件名・種類・Request ID・アプリの行・呼び出しの並び | 当てない（値を含まない作りで守る） | `DetailsTest`・`NamesTest` |
