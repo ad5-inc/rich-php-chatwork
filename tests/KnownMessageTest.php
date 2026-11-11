@@ -127,6 +127,58 @@ final class KnownMessageTest extends PlainTestCase
         $this->assertSame('接続できない', KnownMessage::of(new ConnectionException('cURL error 6: probe-user')));
     }
 
+    /**
+     * @return iterable<string, array{list<string>}>
+     */
+    public static function commandLines(): iterable
+    {
+        yield 'mysqldump -p' => [['mysqldump', '-uroot', '-pS3cretPw', 'hito']];
+        yield '--password の後ろ' => [['probe-cli', '--password', 'S3cretPw']];
+        yield '引用符の中の -p' => [['probe-cli', "'-pS3cretPw'"]];
+        yield 'sshpass -p' => [['sshpass', '-p', 'S3cretPw', 'ssh', 'probe@db.internal']];
+        yield '--token' => [['probe-cli', '--token', 'AbCdEf12']];
+    }
+
+    /**
+     * @param list<string> $arguments
+     */
+    #[Test]
+    #[DataProvider('commandLines')]
+    public function コマンドの失敗は_コマンドラインを出さず終了コードだけを出す(array $arguments): void
+    {
+        $process = new \Symfony\Component\Process\Process(['sh', '-c', 'exit 2', '--', ...$arguments]);
+        $process->run();
+
+        $laravel = new \Illuminate\Process\Exceptions\ProcessFailedException(new \Illuminate\Process\ProcessResult($process));
+        $symfony = new \Symfony\Component\Process\Exception\ProcessFailedException($process);
+
+        foreach ([$laravel, $symfony] as $e) {
+            $this->assertSame('コマンドの失敗（終了コード 2、コマンドはログ）', KnownMessage::of($e));
+            $this->assertSame('コマンドの失敗・終了コード 2', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+        }
+    }
+
+    #[Test]
+    public function コマンドの時間切れと起動の失敗は_コマンドラインを出さない(): void
+    {
+        $process = new \Symfony\Component\Process\Process(['sh', '-c', 'sleep 2', '--', '-pS3cretPw']);
+        $process->setTimeout(0.2);
+        try {
+            $process->run();
+            $this->fail('時間切れにならなかった');
+        } catch (\Symfony\Component\Process\Exception\ProcessTimedOutException $timeout) {
+        }
+
+        $laravel = new \Illuminate\Process\Exceptions\ProcessTimedOutException($timeout, new \Illuminate\Process\ProcessResult($process));
+        foreach ([$timeout, $laravel] as $e) {
+            $this->assertSame('コマンドの時間切れ（0.2 秒、コマンドはログ）', KnownMessage::of($e));
+            $this->assertSame('コマンドの時間切れ・0.2 秒', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+        }
+
+        $start = new \Symfony\Component\Process\Exception\ProcessStartFailedException(new \Symfony\Component\Process\Process(['probe-cli', '-pS3cretPw']), 'probe');
+        $this->assertSame('コマンドを起動できなかった（コマンドはログ）', KnownMessage::of($start));
+    }
+
     #[Test]
     public function ほかの例外は組み立てない(): void
     {

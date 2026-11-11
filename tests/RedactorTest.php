@@ -87,6 +87,16 @@ final class RedactorTest extends PlainTestCase
         yield 'クレジットカード（区切りなし）' => ['card 4111111111111111 end', 'card （伏せた） end'];
         yield 'クレジットカード（-）' => ['card 4111-1111-1111-1111 end', 'card （伏せた） end'];
         yield 'クレジットカード（空白）' => ['card 4111 1111 1111 1111 end', 'card （伏せた） end'];
+        yield 'キーの値が URL' => ['login failed password=https://host.example/12/ hunter2secret', 'login failed password=（伏せた）'];
+        yield 'キーの値が URL の後ろに続く' => ['token_endpoint: https://login.example.com/123e4567-e89b-12d3-a456-426614174000/oauth2/token probe-secret-9', 'token_endpoint: （伏せた）'];
+        yield 'バッククォートで囲んだ URL' => ['Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response', 'Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response'];
+        yield '文の終わりの . の前の URL' => ['GET https://api.example.com/v1/users. Retry', 'GET https://api.example.com/v1/users. Retry'];
+        yield '日本語が続く URL' => ['https://api.example.com/v1/users/12345です', 'https://api.example.com/v1/users/{…}です'];
+        yield 'Amex' => ['card 3782 822463 10005 end', 'card （伏せた） end'];
+        yield 'Diners' => ['card 3056-930902-5904 end', 'card （伏せた） end'];
+        yield 'スキームの無い URL' => ['post to hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12 failed', 'post to hooks.slack.example/services/{…}/{…}/{…} failed'];
+        yield '\\/ でエスケープした URL' => ['url https:\\/\\/hooks.slack.example\\/services\\/T0PROBE01\\/B0PROBE02\\/ProbeSecretProbeSecret12 end', 'url https:\\/\\/hooks.slack.example\\/services\\/{…}\\/{…}\\/{…} end'];
+        yield '%3D と %3A の区切り' => ['password%3Dprobe-1&token%3aprobe-2', 'password%3D（伏せた）&token%3a（伏せた）'];
         yield 'pw のキー' => ['pw=hunter2, next', 'pw=（伏せた）, next'];
         yield 'passphrase と passcode' => ['passphrase=probe-1, passcode: 1234', 'passphrase=（伏せた）, passcode: （伏せた）'];
         yield 'リストの添字' => ['password[0]=probe-2&token[]=probe-3&tokens%5B0%5D=probe-4&name=a', 'password[0]=（伏せた）&token[]=（伏せた）&tokens%5B0%5D=（伏せた）&name=a'];

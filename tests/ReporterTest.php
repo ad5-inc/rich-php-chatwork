@@ -136,6 +136,8 @@ final class ReporterTest extends TestCase
         yield '1 行目が Array' => ["Array\n(\n    [pin] => probe-pw-19\n)", ['probe-pw-19']];
         yield '1 行目が {' => ["{\n    \"pin\": \"probe-pw-20\"\n}", ['probe-pw-20']];
         yield '1 行目が array (' => ["array (\n  'pin' => 'probe-pw-21',\n)", ['probe-pw-21']];
+        yield 'プロセスの文言を写した物' => ["The command \"mysqldump -pS3cretPw hito\" failed.\n\nExit Code: 2", ['S3cretPw']];
+        yield 'プロセスの時間切れを写した物' => ["The process \"mysqldump -pS3cretPw\" exceeded the timeout of 60 seconds.\nprobe", ['S3cretPw']];
         yield '1 行目の終わりが {' => ["payload {\n  \"pin\": \"probe-pw-22\"\n}", ['probe-pw-22']];
     }
 
@@ -185,6 +187,7 @@ final class ReporterTest extends TestCase
     public static function multiLine(): iterable
     {
         yield '2 行目の値' => ["first line\npin probe-pw-14", 'first line'];
+        yield '末尾の改行' => ["Some message\n", 'Some message'];
         yield 'Carbon の書式の失敗' => ["Unexpected data found.\nTrailing data", 'Unexpected data found.'];
         yield 'Symfony Console の名前の誤り' => ["Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily", 'Command "report:dail" is not defined.'];
         yield 'SMTP の 2 行の応答' => ["Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\r\n550 5.1.1 Please check probe-user@example.test\"", 'Expected response code "250" but got code "550", with message "550-5.1.1 The account does not exist.'];
@@ -198,7 +201,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($this->failWithMessage($message));
 
-        $this->assertStringContainsString('[/title][code]' . $first . '（2 行目から先は省いた）[/code]', $body);
+        $this->assertStringContainsString('[/title][code]' . $first . (rtrim($message) === $first ? '' : '（2 行目から先は省いた）') . '[/code]', $body);
         $this->assertStringNotContainsString('probe-user', $body);
         $this->assertStringNotContainsString('probe-pw', $body);
     }
