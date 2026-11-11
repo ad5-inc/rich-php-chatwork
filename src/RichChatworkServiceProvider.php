@@ -7,10 +7,14 @@ namespace Ad5\RichPhpChatwork;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Events\Looping;
+use Illuminate\Queue\Events\WorkerStopping;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
@@ -44,8 +48,17 @@ final class RichChatworkServiceProvider extends ServiceProvider
         // 記録する例外（dontReport に当たらないもの）を送る。ログへの記録はそのまま続く
         $this->callAfterResolving(ExceptionHandler::class, function (ExceptionHandler $handler): void {
             if ($handler instanceof Handler) {
+                // Handler::reportThrowable() は callback を try で包まない。ここから投げると Laravel が元の例外をログに書かずに終わる
                 $handler->reportable(function (Throwable $e): void {
-                    $this->app->make(Reporter::class)->report($e);
+                    try {
+                        $this->app->make(Reporter::class)->report($e);
+                    } catch (Throwable $failure) {
+                        try {
+                            Log::warning('例外を Chatwork に送れなかった', ['exception' => $failure, 'original' => $e::class]);
+                        } catch (Throwable) {
+                            // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
+                        }
+                    }
                 });
             }
         });
@@ -81,6 +94,16 @@ final class RichChatworkServiceProvider extends ServiceProvider
         });
         $events->listen(JobFailed::class, static function (JobFailed $event) use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->failed($event->job, $event->exception));
+        });
+        $events->listen(JobAttempted::class, static function (JobAttempted $event) use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->attempted($event->job));
+        });
+        // Looping は until() で出るので、何も返さない（false を返すとワーカーの周が止まる）
+        $events->listen(Looping::class, static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->settle());
+        });
+        $events->listen(WorkerStopping::class, static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->settle());
         });
     }
 }
