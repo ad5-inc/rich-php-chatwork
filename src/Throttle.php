@@ -286,6 +286,13 @@ final class Throttle
             throw new \RuntimeException('予備の一時フォルダが自分の物でないか、書き込めない');
         }
 
-        return new CacheRepository(new FileStore(new Filesystem(), $directory, 0600, false));
+        // FileStore は「ファイルの権限」をフォルダにも当てる。0600 のままだとフォルダの x が落ち、root でない利用者は
+        // 中に入れず、予備が使えないままプロセスの中に落ちる。フォルダは 0700、ファイルは 0600 にする
+        return new CacheRepository(new class (new Filesystem(), $directory, 0600, false) extends FileStore {
+            protected function ensurePermissionsAreCorrect($path): void
+            {
+                @chmod($path, is_dir($path) ? 0700 : 0600);
+            }
+        });
     }
 }
