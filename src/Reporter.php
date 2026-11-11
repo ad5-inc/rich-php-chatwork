@@ -41,6 +41,9 @@ final class Reporter
 
     private readonly JobEntrance $entrance;
 
+    /** 送り先が空の警告を書いたか（プロセスごとに 1 度。Reporter はコンテナの singleton） */
+    private bool $warnedEmpty = false;
+
     public function __construct(
         private readonly Application $app,
         private readonly Config $config,
@@ -81,6 +84,7 @@ final class Reporter
 
         try {
             if (! $send) {
+                $this->warnIfEmpty($token, $room);
                 if ($this->config->get('rich-chatwork.log_when_silent') === true) {
                     Log::info('例外の知らせ（この環境では Chatwork に送らない）', ['body' => $this->body($e)]);
                 }
@@ -88,14 +92,30 @@ final class Reporter
                 return;
             }
 
-            $seconds = Settings::positive($this->config, 'throttle_seconds', 60);
-            $this->deliver($token, $room, $this->throttleKey($e), $seconds, fn (?string $repeat): string => $this->compose($e, $repeat), '同じ例外');
-        } catch (Throwable $sendError) {
+            // 間引きのキーを作れない（主に見る例外を辿る処理が失敗の元）なら、辿らずに作ったキーで最小の知らせを送る
             try {
-                Log::warning('例外を Chatwork に送れなかった', ['exception' => $e::class, 'error' => $sendError::class]);
-            } catch (Throwable) {
-                // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
+                $key = $this->throttleKey($e);
+                $name = new Names($this->source)->short(Chain::of($e, $this->wrappers())->main::class);
+                $compose = function (array $extra) use ($e): string {
+                    try {
+                        return $this->compose($e, array_values(array_filter($extra, is_string(...))));
+                    } catch (Throwable $failure) {
+                        $this->logFailure('例外の知らせを組み立てられなかった', $failure, $e);
+
+                        return $this->minimal($e);
+                    }
+                };
+            } catch (Throwable $failure) {
+                $this->logFailure('例外の知らせを組み立てられなかった', $failure, $e);
+                $key = 'rich-chatwork:minimal:' . sha1($e::class . '|' . $this->source->relative($e->getFile()) . ':' . $e->getLine());
+                $name = new Names($this->source)->short($e::class);
+                $compose = fn (array $extra): string => $this->minimal($e);
             }
+
+            $seconds = Settings::positive($this->config, 'throttle_seconds', 60);
+            $this->deliver($token, $room, $key, $seconds, $compose, '同じ例外', $name);
+        } catch (Throwable $sendError) {
+            $this->logFailure('例外を Chatwork に送れなかった', $sendError, $e);
         }
     }
 
@@ -118,14 +138,18 @@ final class Reporter
             }
 
             $seconds = Settings::positive($this->config, 'notice_throttle_seconds', 3600);
-            $compose = fn (?string $repeat): string => $this->composeNotice($title, $lines, $code, $repeat);
-            $this->deliver($token, $room, 'rich-chatwork-notice:' . sha1($throttleKey), $seconds, $compose, '同じ知らせ');
+            $compose = function (array $extra) use ($title, $lines, $code): string {
+                try {
+                    return $this->composeNotice($title, $lines, $code, array_values(array_filter($extra, is_string(...))));
+                } catch (Throwable $failure) {
+                    $this->logFailure('知らせを組み立てられなかった', $failure, null);
+
+                    return $this->minimal(null);
+                }
+            };
+            $this->deliver($token, $room, 'rich-chatwork-notice:' . sha1($throttleKey), $seconds, $compose, '同じ知らせ', '知らせ');
         } catch (Throwable $sendError) {
-            try {
-                Log::warning('知らせを Chatwork に送れなかった', ['title' => $title, 'error' => $sendError::class]);
-            } catch (Throwable) {
-                // ログにも書けないなら諦める
-            }
+            $this->logFailure('知らせを Chatwork に送れなかった', $sendError, null);
         }
     }
 
@@ -134,7 +158,7 @@ final class Reporter
      */
     public function body(Throwable $e): string
     {
-        return $this->compose($e, null);
+        return $this->compose($e, []);
     }
 
     /**
@@ -158,19 +182,34 @@ final class Reporter
     }
 
     /**
-     * @param Closure(?string): string $compose 間引いた回数の行を受けて本文を作る
+     * 間引き → 全体の上限 → 送る。送れなかったら間引きの印を消して回数を戻し、すぐ送り直せるようにする
+     *
+     * @param Closure(list<string>): string $compose 本文の末尾に足す行（間引いた回数・上限で送らなかった件数）を受けて本文を作る
+     * @param string $name 全体の上限で送らなかったときに数える名前（短いクラス名）
      */
-    private function deliver(string $token, string $room, string $key, int $seconds, Closure $compose, string $label): void
+    private function deliver(string $token, string $room, string $key, int $seconds, Closure $compose, string $label, string $name): void
     {
+        $this->throttle->begin();
         $state = $this->throttle->attempt($key, $seconds);
         if ($state === null) {
             return;
         }
 
+        if (! $this->throttle->slot(Settings::positive($this->config, 'max_per_minute', 20))) {
+            $this->throttle->release($key, $state['count'] ?? 0);
+            $this->throttle->overflow($name);
+
+            return;
+        }
+
+        $overflow = $this->throttle->takeOverflow();
+        $extra = array_values(array_filter([$this->repeatLine($label, $state, $seconds), self::overflowLine($overflow)], is_string(...)));
+
         try {
-            $this->transport->send($token, $room, $compose($this->repeatLine($label, $state, $seconds)));
+            $this->transport->send($token, $room, $compose($extra));
         } catch (Throwable $sendError) {
-            $this->throttle->restore($key, $state['count'] ?? 0);
+            $this->throttle->release($key, $state['count'] ?? 0);
+            $this->throttle->restoreOverflow($overflow);
 
             throw $sendError;
         }
@@ -178,7 +217,86 @@ final class Reporter
         $this->throttle->sent($key);
     }
 
-    private function compose(Throwable $e, ?string $repeat): string
+    /**
+     * 「ほかの例外: 15 件（QueryException 12・TypeError 3、上限で送らなかった。ログを見る）」。多い順に 3 つまで
+     *
+     * @param array<string, int> $overflow
+     */
+    private static function overflowLine(array $overflow): ?string
+    {
+        if ($overflow === []) {
+            return null;
+        }
+
+        arsort($overflow);
+        $top = array_map(static fn (string $name, int $count): string => "{$name} {$count}", array_keys(array_slice($overflow, 0, 3, true)), array_slice($overflow, 0, 3, true));
+
+        return Text::field('ほかの例外: ' . array_sum($overflow) . ' 件（' . implode('・', $top) . '、上限で送らなかった。ログを見る）', false, null, self::LINE_WIDTH);
+    }
+
+    /**
+     * 本文を組み立てられなかったときの、値を含まない知らせ。取れない物（アプリ名・環境・Request ID）は省く
+     *
+     * $e が null なら notice の知らせ
+     */
+    private function minimal(?Throwable $e): string
+    {
+        try {
+            $prefix = $this->expand($e === null ? 'notice_title' : 'title', '{app}（{env}）');
+        } catch (Throwable) {
+            $prefix = '';
+        }
+        $headline = ($e === null ? '知らせ' : new Names($this->source)->short($e::class)) . ': 知らせを組み立てられなかった';
+        $id = $this->requestId();
+
+        return '[info][title]' . Text::cut(Text::escape(str_replace("\0", '', $prefix . $headline), false), self::TITLE_WIDTH) . '[/title]'
+            . ($id === null ? '' : 'Request ID: ' . Text::field($id, false, null, self::ID_WIDTH) . '（中身はログをこの番号で引く）')
+            . '[/info]';
+    }
+
+    /**
+     * 部品自身の失敗を laravel.log に書く。部品の例外は生で（文言と呼び出しの並びが残る形で）渡す。
+     * 元の例外はクラスだけを添える（元の例外そのものは Laravel が別に書いている）
+     */
+    private function logFailure(string $message, Throwable $failure, ?Throwable $original): void
+    {
+        try {
+            Log::warning($message, array_filter([
+                'exception' => $failure,
+                'original' => $original === null ? null : $original::class,
+                'request_id' => $this->requestId(),
+            ], static fn (mixed $value): bool => $value !== null));
+        } catch (Throwable) {
+            // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
+        }
+    }
+
+    /**
+     * 本番（送る環境）で送り先が空なら、プロセスごとに 1 度だけ警告する。送り先を書き忘れたまま黙るのを防ぐ
+     */
+    private function warnIfEmpty(string $token, string $room): void
+    {
+        if ($this->warnedEmpty || ($token !== '' && $room !== '') || ! $this->environmentAllows()) {
+            return;
+        }
+
+        $this->warnedEmpty = true;
+        Log::warning('Chatwork の送り先が空なので、例外を知らせない（REPORT_CHATWORK_ACCESS_TOKEN・REPORT_CHATWORK_ROOM_ID）', ['environment' => $this->app->environment()]);
+    }
+
+    private function requestId(): ?string
+    {
+        try {
+            return $this->context('request_id');
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @param list<string> $extra 呼び出しの並びの前に足す行
+     */
+    private function compose(Throwable $e, array $extra): string
     {
         $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
         $chain = Chain::of($e, $this->wrappers());
@@ -219,8 +337,8 @@ final class Reporter
         foreach ($this->entrance($e, $main, $redactor) as $line) {
             $body->text($line);
         }
-        if ($repeat !== null) {
-            $body->text($repeat);
+        foreach ($extra as $line) {
+            $body->text($line);
         }
 
         $trace = Text::scrub(new Trace($this->source)->of($main), true);
@@ -343,8 +461,10 @@ final class Reporter
 
         $when = '前の知らせ';
         if ($state['last'] !== null) {
-            $last = Carbon::createFromTimestamp($state['last'], date_default_timezone_get());
-            $when .= '（' . $last->format($last->isSameDay(Carbon::now()) ? 'H:i' : 'n/j H:i') . '）';
+            $timezone = $this->config->get('app.timezone');
+            $timezone = is_string($timezone) && $timezone !== '' ? $timezone : date_default_timezone_get();
+            $last = Carbon::createFromTimestamp($state['last'], $timezone);
+            $when .= '（' . $last->format($last->isSameDay(Carbon::now($timezone)) ? 'H:i' : 'n/j H:i') . '）';
         }
 
         return "{$label}: {$when}の後の " . self::duration($seconds) . "に、送らずに {$state['count']} 回";
@@ -362,8 +482,9 @@ final class Reporter
 
     /**
      * @param list<string> $lines
+     * @param list<string> $extra
      */
-    private function composeNotice(string $title, array $lines, ?string $code, ?string $repeat): string
+    private function composeNotice(string $title, array $lines, ?string $code, array $extra): string
     {
         $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
         $heading = Text::cut(Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ', false, null, self::TITLE_WIDTH) . Text::field($title, false, null, self::TITLE_WIDTH), self::TITLE_WIDTH);
@@ -373,10 +494,10 @@ final class Reporter
             explode("\n", str_replace(["\r\n", "\r"], "\n", $code)),
         ));
 
-        $text = self::noticeBody($rows, null, $block, $repeat)->render($heading);
+        $text = self::noticeBody($rows, null, $block, $extra)->render($heading);
         for ($keep = count($rows); mb_strlen($text) > Body::MAX_LENGTH && $keep > 0;) {
             $keep--;
-            $text = self::noticeBody(array_slice($rows, 0, $keep), '（以下 ' . (count($rows) - $keep) . ' 行は省いた）', $block, $repeat)->render($heading);
+            $text = self::noticeBody(array_slice($rows, 0, $keep), '（以下 ' . (count($rows) - $keep) . ' 行は省いた）', $block, $extra)->render($heading);
         }
 
         return $text;
@@ -384,8 +505,9 @@ final class Reporter
 
     /**
      * @param list<string> $rows
+     * @param list<string> $extra
      */
-    private static function noticeBody(array $rows, ?string $omitted, ?string $block, ?string $repeat): Body
+    private static function noticeBody(array $rows, ?string $omitted, ?string $block, array $extra): Body
     {
         $body = new Body();
         foreach ($rows as $row) {
@@ -397,8 +519,8 @@ final class Reporter
         if ($block !== null) {
             $body->code($block);
         }
-        if ($repeat !== null) {
-            $body->text($repeat);
+        foreach ($extra as $line) {
+            $body->text($line);
         }
 
         return $body;

@@ -528,8 +528,9 @@ final class ReporterTest extends TestCase
         $this->assertStringContainsString('同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 2 回', $this->transport->sent[1]['body']);
         $index = array_search('例外を Chatwork に送れなかった', $logged->messages, true);
         $this->assertIsInt($index);
-        $this->assertInstanceOf(RuntimeException::class, $logged->contexts[$index]['exception'] ?? null);
-        $this->assertSame('Chatwork is down', ($logged->contexts[$index]['exception'] ?? null)?->getMessage());
+        $failure = $logged->contexts[$index]['exception'] ?? null;
+        $this->assertInstanceOf(RuntimeException::class, $failure);
+        $this->assertSame('Chatwork is down', $failure->getMessage());
         $this->assertSame(RuntimeException::class, $logged->contexts[$index]['original'] ?? null);
         $this->assertSame('req-1', $logged->contexts[$index]['request_id'] ?? null);
     }
@@ -592,6 +593,9 @@ final class ReporterTest extends TestCase
                 parent::__construct($items);
             }
 
+            /**
+             * @param array<mixed>|string $key
+             */
             public function get($key, $default = null): mixed
             {
                 if ($key === $this->broken) {
