@@ -701,7 +701,9 @@ final class ReporterTest extends TestCase
 
         // 要約が長くても、種類（短いクラス名）は件名に残り、要約の後ろから切る
         $long = new \TypeError('App\\Services\\' . str_repeat('Long', 10) . '\\VeryLongServiceNameForProbe::runSomethingVeryLong(): Argument #1 ($employeeId) must be of type int, null given');
-        $title = (string) preg_replace('/\A\[info\]\[title\](.*?)\[\/title\].*\z/su', '$1', (string) $oversized->invoke($this->reporter(), $long, []));
+        $body = $oversized->invoke($this->reporter(), $long, []);
+        $this->assertIsString($body);
+        $title = (string) preg_replace('/\A\[info\]\[title\](.*?)\[\/title\].*\z/su', '$1', $body);
         $this->assertStringStartsWith('Probe（production）TypeError: VeryLongServiceNameForProbe::', $title);
         $this->assertLessThanOrEqual(80, mb_strwidth($title));
     }

@@ -16,13 +16,15 @@ final class Redactor
 
     private const JAPANESE_KEY_WORDS = 'パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム';
 
-    private const KEY_WORDS = 'password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
+    /** pass(?![a-z]) は db_pass・smtp_pass に当て、passed・passenger には当てない（password は先の語で当たる） */
+    private const KEY_WORDS = 'password|passwd|pwd|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
 
     /**
      * キーの後ろの区切り。語の前に境界は求めず（remember_token・XSRF-TOKEN）、語の後ろの続き（password_confirmation）は許す。
-     * print_r（[password] => x）・角括弧のキー（user[password]=x）・エスケープした JSON（\"password\":）のため、] と \ を許す
+     * print_r（[password] => x）・角括弧のキー（user[password]=x、http_build_query の %5D）・何重にもエスケープした JSON
+     * （\"password\":・\\\"password\\\":）のため、] と %5D と \ の繰り返しを許す
      */
-    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*\]?(?:\\\\)?[\'"]?\s*(?:=>|=|:|：)\s*)';
+    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*(?:\]|%5D)?(?:\\\\)*[\'"]?\s*(?:=>|=|:|：)\s*)';
 
     /**
      * 全角を揃えると値の区切りになる文字。揃える前に私用の文字へ逃がし、値の中として扱う（hun，ter2 の ter2 を残さない）。伏せた後に戻す
@@ -66,10 +68,16 @@ final class Redactor
      */
     public function message(string $text): ?string
     {
-        $text = $this->copiedQuery(self::normalize(strtr($text, self::KEEP_FULLWIDTH)));
-        foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), self::japaneseKey(), $this->keyValue(false)] as [$pattern, $replacement]) {
+        $text = self::unescapeUnicode($text);
+        $text = $text === null ? null : $this->copiedQuery(self::normalize(strtr($text, self::KEEP_FULLWIDTH)));
+        foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), self::japaneseKey()] as [$pattern, $replacement]) {
             $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         }
+        // 値が配列・serialize の物は、キーと値の規則（行末までしか見ない）より先に、閉じ括弧・長さの所まで伏せる
+        $text = $text === null ? null : $this->arrayValues($text);
+        $text = $text === null ? null : $this->serialized($text);
+        [$pattern, $replacement] = $this->keyValue(false);
+        $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         $text = $text === null ? null : $this->longAlnum($text);
 
         foreach ($this->extraPatterns as $pattern) {
@@ -134,7 +142,100 @@ final class Redactor
             }
         }
 
-        return mb_convert_kana($text, 'KVas', 'UTF-8');
+        // mb_convert_kana の a は ＂ ＇ ＼ を揃えない
+        return strtr(mb_convert_kana($text, 'KVas', 'UTF-8'), ['＂' => '"', '＇' => "'", '＼' => '\\']);
+    }
+
+    /**
+     * JSON の \uXXXX（サロゲートの組も）を照合用に戻す（json_encode した「パスワード」のキーに当てるため）。本文にも戻した形で出る。
+     * 制御文字・" ・\ は戻さない（JSON の形を壊さない）
+     */
+    private static function unescapeUnicode(string $text): ?string
+    {
+        return Text::replace('/\\\\u(d[89ab][0-9a-f]{2})\\\\u(d[c-f][0-9a-f]{2})|\\\\u([0-9a-f]{4})/i', static function (array $match): string {
+            $code = ($match[3] ?? '') !== ''
+                ? (int) hexdec($match[3])
+                : 0x10000 + (((int) hexdec($match[1]) - 0xD800) << 10) + ((int) hexdec($match[2]) - 0xDC00);
+            if ($code < 0x20 || $code === 0x22 || $code === 0x5C || ($code >= 0xD800 && $code <= 0xDFFF)) {
+                return $match[0];
+            }
+            return mb_chr($code, 'UTF-8');
+        }, $text);
+    }
+
+    /**
+     * キーの値が配列（print_r の Array (…)・var_export の array (…)・JSON の […]・{…}）なら、対応する閉じ括弧まで伏せる
+     */
+    private function arrayValues(string $text): ?string
+    {
+        if (preg_match_all('/' . self::KEY . '(?=Array\s*\(|array\s*\(|\[|\{)/iu', $text, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER) === false) {
+            return null;
+        }
+
+        // 後ろから伏せると、前の一致の位置が変わらない。内側を伏せた後も括弧の組は保たれる
+        foreach (array_reverse($matches) as $match) {
+            $start = $match[0][1] + strlen($match[0][0]);
+            $text = substr($text, 0, $start) . self::MARK . substr($text, self::closing($text, $start));
+        }
+
+        return $text;
+    }
+
+    /**
+     * $start から始まる配列の、閉じ括弧の次の位置。閉じていなければ末尾
+     */
+    private static function closing(string $text, int $start): int
+    {
+        $open = strpos($text, '(', $start);
+        $parenthesis = in_array($text[$start] ?? '', ['A', 'a'], true) && $open !== false;
+        // print_r の中は引用符で囲まない。var_export は '、JSON は " で囲む
+        $quote = match (true) {
+            ! $parenthesis => '"',
+            $text[$start] === 'a' => "'",
+            default => null,
+        };
+        $pairs = $parenthesis ? ['(' => ')'] : ['[' => ']', '{' => '}'];
+        $depth = 0;
+        $inString = false;
+
+        for ($index = $parenthesis ? (int) $open : $start, $length = strlen($text); $index < $length; $index++) {
+            $char = $text[$index];
+            if ($char === '\\') {
+                $index++;
+                continue;
+            }
+            if ($quote !== null && $char === $quote) {
+                $inString = ! $inString;
+                continue;
+            }
+            if ($inString) {
+                continue;
+            }
+            if (isset($pairs[$char])) {
+                $depth++;
+            } elseif (in_array($char, $pairs, true) && --$depth === 0) {
+                return $index + 1;
+            }
+        }
+
+        return strlen($text);
+    }
+
+    /**
+     * serialize の形（s:8:"password";s:7:"…";）。値の長さが書いてあるので、その長さだけ伏せる
+     */
+    private function serialized(string $text): ?string
+    {
+        if (preg_match_all('/s:\d+:"(?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*";s:(\d+):"/iu', $text, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER) === false) {
+            return null;
+        }
+
+        foreach (array_reverse($matches) as $match) {
+            $start = $match[0][1] + strlen($match[0][0]);
+            $text = substr($text, 0, $start) . self::MARK . substr($text, min(strlen($text), $start + (int) $match[1][0]));
+        }
+
+        return $text;
     }
 
     /**
