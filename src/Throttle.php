@@ -262,9 +262,12 @@ final class Throttle
     private function store(int $level): Cache
     {
         if ($level === 0) {
-            $store = $this->config->get('rich-chatwork.cache_store');
+            // DB の障害のときも間引きが効くよう、既定はファイルに置く（Laravel の既定の database にしない）。
+            // テストではテストごとに消える array に置く（ファイルだと前のテストの印が残り、送る形を確かめられない）
+            $default = $this->config->get('app.env') === 'testing' ? 'array' : 'file';
+            $store = $this->config->get('rich-chatwork.cache_store', $default);
 
-            return $this->cache->store(is_string($store) ? $store : null);
+            return $this->cache->store(is_string($store) ? $store : $default);
         }
 
         return $this->file ??= $this->fileStore();

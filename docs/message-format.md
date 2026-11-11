@@ -6,7 +6,7 @@
 
 ```text
 [info][title]{件名}[/title]
-[code]{メッセージ}[/code]                    ← 形の分かる例外は必ず。ほかは send_message のときだけ（値の書き出しを含めば省く。目印が改行だけなら 1 行目と「（2 行目から先は省いた）」）
+[code]{メッセージ}[/code]                    ← 文言があれば必ず（形の分かる例外は組み立て直した物、ほかは伏せた物。省かない）
 種類: {件名に入らなかった項目}                ← 無ければ出さない
 包んだもの: …                                 ← あるときだけ
 原因: …                                       ← あるときだけ（3 行まで）
@@ -69,7 +69,7 @@ Request ID: {値}（中身はログをこの番号で引く）
 | コンパイル済みのビューで投げた | 一番近いアプリの段に「（ビュー resources/views/x.blade.php の中で投げた）」 |
 | アプリの段が無い | 「無し（vendor の X.php:N で投げた）」。ビューが分かれば「無し（ビュー … の中）」 |
 
-vendor と `storage/framework/views/` はアプリの段に数えない。前後のコードは前後 2 行で、`snippet_paths`（既定 `app/`・`routes/`）の中のファイルだけ読む。
+vendor と `storage/framework/views/` はアプリの段に数えない。前後のコードは前後 2 行で、`app/`・`routes/` の中のファイルだけ読む。
 
 ## 入口
 
@@ -102,7 +102,7 @@ Request ID: 3f2a…（ジョブの中のログ）
 ```
 
 - 時刻はアプリのタイムゾーン（`app.timezone`）。当日でなければ日付を付ける
-- 秒数は `throttle_seconds`（notice は `notice_throttle_seconds`）。60 秒までは秒、それを超えたら分・時間（`90` は `1 分 30 秒`、`3600` は `1 時間`）
+- 秒数は 60 秒（notice は 1 時間）。60 秒までは秒、それを超えたら分・時間（`90` は `1 分 30 秒`、`3600` は `1 時間`）
 - 前の知らせの時刻が取れなければ、前の知らせを書かず「送らずに N 回」だけ
 - 送れなかったことがあれば、その 1 回も数え、前の知らせの後の窓ではなく、数え始めた時刻から「{時刻} から、送らずに N 回（送れなかった分を含む）」と書く
 - キャッシュが使えないときも、予備の置き場（一時フォルダのファイル・プロセスの中）で数えた回数を出す
@@ -113,13 +113,13 @@ Request ID: 3f2a…（ジョブの中のログ）
 ## notice
 
 ```text
-[info][title]{notice_title}知らせ: {タイトル}[/title]{行}
+[info][title]{アプリ名}（{環境}）知らせ: {タイトル}[/title]{行}
 {行}
 [code]{code}[/code]{同じ知らせ・ほかの例外}[/info]
 ```
 
 - 行と枠は伏せて逃がす。行と枠の 1 行は 500 まで
-- 地の文の行は、値の書き出しの形を含むなら行ごと「（値の書き出しを含むので省いた。ログを見る）」にする（[redaction.md](redaction.md#値の書き出しを含む文言は省く)）。枠は省かない
+- 地の文の行も枠も省かず、値だけを伏せる（[redaction.md](redaction.md#文言は省かない)）
 - 30,000 文字を超えたら、枠の末尾の行から落として枠の最後に「（以下 N 行は省いた）」を置く。枠を落としきっても超えれば、地の文の行を後ろから落として「（以下 N 行は省いた）」を足す
 
 ## 最小の知らせ
@@ -170,7 +170,7 @@ Request ID: …（中身はログをこの番号で引く）
 [hr][code]…[/code][/info]
 ```
 
-### ジョブの中の TypeError（`send_message` が true）
+### ジョブの中の TypeError
 
 ```text
 [info][title]example-app（production）TypeError: SyncService::run() 引数 #1 int←null[/title][code]App\Services\Employee\SyncService::run(): Argument #1 ($employeeId) must be of type int, null given, called in app/Jobs/SyncEmployeeJob.php on line 28[/code]種類: 引数の名前: $employeeId
@@ -193,7 +193,7 @@ Request ID: …（中身はログをこの番号で引く）
 ### メモリ切れ（呼び出しの並びが取れない）
 
 ```text
-[info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title]アプリの行: 無し（vendor の Collection.php:512 で投げた）
+[info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title][code]Allowed memory size of 536870912 bytes exhausted (tried to allocate 20480 bytes)[/code]アプリの行: 無し（vendor の Collection.php:512 で投げた）
 コマンド: report:daily
 Request ID: …（中身はログをこの番号で引く）
 呼び出しの並び: 取れない[/info]

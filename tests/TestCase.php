@@ -27,6 +27,8 @@ abstract class TestCase extends Orchestra
         $this->app?->instance(Transport::class, $this->transport);
         // このリポジトリでは tests がアプリのコード
         config(['rich-chatwork.snippet_paths' => ['tests/']]);
+        // 間引きの印はテストごとに消える array に置く（既定のファイルだと、前のテストの印が残って送られない）
+        config(['rich-chatwork.cache_store' => 'array']);
     }
 
     protected function useEnvironment(string $environment): void

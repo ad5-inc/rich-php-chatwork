@@ -87,7 +87,8 @@ final class Reporter
         try {
             if (! $send) {
                 $this->warnIfEmpty($token, $room);
-                if ($this->config->get('rich-chatwork.log_when_silent') === true) {
+                // 送らない環境（テスト・手元）では、送る中身をログに書いて形を確かめられるようにする
+                if ($this->config->get('rich-chatwork.log_when_silent') !== false) {
                     Log::info('例外の知らせ（この環境では Chatwork に送らない）', ['body' => $this->body($e)]);
                 }
 
@@ -442,7 +443,8 @@ final class Reporter
     }
 
     /**
-     * 形の分かる例外は設定に関係なく組み立てた文言。それ以外は send_message のときだけ、元の文言を伏せて送る
+     * 例外の文言。形の分かる例外は組み立て直した物、それ以外は元の文言を伏せた物を、どんな文言でも省かずに出す。
+     * 何の例外かを知らせだけで分かるようにするため（README「ゴール」の 2）。長さだけ message_max_length で切る
      */
     private function message(Throwable $main, ?string $assembled, Redactor $redactor): ?string
     {
@@ -451,29 +453,14 @@ final class Reporter
         if ($assembled !== null) {
             return Text::field($assembled, true, null, $width);
         }
-        if ($this->config->get('rich-chatwork.send_message') !== true || rtrim($main->getMessage()) === '') {
+
+        // 末尾の空白と改行は落とす（"…\n" で終わる文言の最後に空の行を出さない）
+        $message = rtrim($main->getMessage());
+        if ($message === '') {
             return null;
         }
 
-        // 値の書き出しを含む文言は伏せずに省く。目印の改行を残すよう、[code] の中の形で文字を直してから見る
-        // 末尾の空白と改行は落とす（"…\n" で終わる文言を複数行とみなさない）
-        $message = rtrim($main->getMessage());
-        $scrubbed = Text::scrub($message, true);
-        $redact = fn (string $text): ?string => $redactor->message($this->source->relativeIn($text));
-        $omission = $scrubbed === null ? null : Redactor::omission($scrubbed);
-        if ($omission === Redactor::COMMAND_OMITTED) {
-            return Text::field($omission, true, null, $width);
-        }
-        if ($scrubbed !== null && $omission !== null) {
-            // 目印が改行だけなら、1 行目は普通の文として伏せて出す
-            $first = Redactor::firstLineOfPlainText($scrubbed);
-
-            return $first === null
-                ? Text::field(Redactor::DUMP_OMITTED, true, null, $width)
-                : Text::field($first, true, $redact, $width) . '（2 行目から先は省いた）';
-        }
-
-        return Text::field($message, true, $redact, $width);
+        return Text::field($message, true, fn (string $text): ?string => $redactor->message($this->source->relativeIn($text)), $width);
     }
 
     /**
@@ -617,13 +604,8 @@ final class Reporter
     {
         $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
         $heading = Text::cut(Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ', false, null, self::TITLE_WIDTH) . Text::field($title, false, null, self::TITLE_WIDTH), self::TITLE_WIDTH);
-        $rows = array_map(static function (string $line) use ($redactor): string {
-            // 地の文の行は、値の書き出しを含むなら行ごと省く（枠の中身は使う側が出す形を決めるので、伏せるだけにする）
-            $scrubbed = Text::scrub($line, true);
-
-            return ($scrubbed === null ? null : Redactor::omission($scrubbed))
-                ?? Text::field($line, false, $redactor->message(...), self::LINE_WIDTH);
-        }, $lines);
+        // 地の文の行も枠も、使う側が書いた物なので省かず、伏せるだけにする
+        $rows = array_map(static fn (string $line): string => Text::field($line, false, $redactor->message(...), self::LINE_WIDTH), $lines);
         $codeLines = $code === null ? null : array_map(
             static fn (string $line): string => Text::field($line, true, $redactor->message(...), self::LINE_WIDTH),
             explode("\n", str_replace(["\r\n", "\r"], "\n", $code)),
@@ -728,7 +710,7 @@ final class Reporter
     {
         $environment = $this->app->environment();
         $only = $this->config->get('rich-chatwork.environments');
-        $silent = $this->config->get('rich-chatwork.silent_environments');
+        $silent = $this->config->get('rich-chatwork.silent_environments', ['testing', 'local']);
 
         if (is_array($silent) && in_array($environment, $silent, true)) {
             return false;
@@ -771,7 +753,8 @@ final class Reporter
 
     private function context(string $name): ?string
     {
-        $key = $this->config->get("rich-chatwork.context.{$name}");
+        // Context のキーは既定で項目の名前と同じ（request_id・request・command）
+        $key = $this->config->get("rich-chatwork.context.{$name}", $name);
         $value = is_string($key) ? Context::get($key) : null;
 
         return is_string($value) && $value !== '' ? $value : null;

@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `Reporter::report(Throwable)` | ServiceProvider が例外のハンドラーの `reportable()` に登録した関数（`Handler` を継承しない Collision のハンドラーも `reportable()` を中の Handler に回すので、継承ではなく `reportable()` の有無で登録する。同じハンドラーには 1 度だけ） | 記録する例外（`dontReport` に当たらない物）を送る。void を返し、関数の中全体を try で包むので、Laravel の元の記録は止まらない（`Handler::reportThrowable()` は callback を try で包まない） |
 | `Reporter::notice(title, lines, key, code)` | 使う側のコード | 例外ではない知らせを送る |
-| `Reporter::body(Throwable)` | `log_when_silent` とテスト | 本文だけを作る（間引きの行は無し） |
+| `Reporter::body(Throwable)` | 送らない環境のログとテスト | 本文だけを作る（間引きの行は無し） |
 | キューと Context のイベント 8 つ | ServiceProvider が登録 | ジョブの入口の印と Request ID の入れ替えと戻し（`JobEntrance`） |
 
 ## 処理の流れ（report）
@@ -18,7 +18,7 @@
 ```mermaid
 flowchart TD
     A[report] --> B{送り先と環境}
-    B -->|送らない| B1[送り先が空なら 1 度だけ警告<br/>log_when_silent なら本文をログへ]
+    B -->|送らない| B1[送り先が空なら 1 度だけ警告<br/>testing・local なら本文をログへ]
     B -->|送る| C[間引きのキーを作る<br/>主に見る例外を辿る]
     C -->|失敗| C1[辿らずにキーを作る<br/>本文は最小の知らせ]
     C --> D{同じ例外の間引き}
@@ -50,8 +50,8 @@ flowchart TD
 
 1. **主に見る例外を決める**（`Chain`）。previous を最大 10 段辿り、外側から包む例外（既定 `ViewException`）を剥ぐ。剥いだ物は「包んだもの」、内側は「原因」（3 つまで）になる
 2. **種類ごとの部分を取る**（`Details` → `Kind`）。件名の要約と「種類」の行の項目
-3. **メッセージを作る**。形の分かる例外は組み立て直す（`KnownMessage`）。それ以外は `send_message` のときだけ、値の書き出しの形を含めば省き（`Redactor::containsDump`）、含まなければ元の文言を伏せる（`Redactor`）
-4. **アプリの行を決める**（`Source::appLine`）。前後のコードは `snippet_paths` の中だけ読む（`Snippet`）
+3. **メッセージを作る**。形の分かる例外は組み立て直す（`KnownMessage`）。それ以外は元の文言を、省かずに伏せる（`Redactor`）
+4. **アプリの行を決める**（`Source::appLine`）。前後のコードは `app/`・`routes/` の中だけ読む（`Snippet`）
 5. **入口を決める**。ジョブ → コマンド → HTTP の順（`JobEntrance`・`Reporter::entrance`）
 6. **呼び出しの並び**（`Trace`、アプリの段を 10 段まで）
 7. **並べる**（`Body`）。30,000 文字を超えたら、呼び出しの並び → 前後のコードの順に塊で落とし、まだ超えればメッセージを詰める。送る直前にも数え、超えていたら、件名は普通のまま本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える

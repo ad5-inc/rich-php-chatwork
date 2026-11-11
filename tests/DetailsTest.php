@@ -118,13 +118,15 @@ final class DetailsTest extends TestCase
     }
 
     #[Test]
-    public function スケジュールのコマンドの失敗は_名前と終了コードを出し_パスと引数は出さない(): void
+    public function スケジュールのコマンドの失敗は_件名に名前と終了コードを出し_文言の引数のメールは伏せる(): void
     {
         $e = $this->plain("Scheduled command ['/home/deploy/php' 'artisan' report:daily --mail=taro@example.com] failed with exit code [1].");
 
         $this->assertSame(['スケジュールのコマンド: report:daily', '終了コード: 1'], Details::lines($e));
         $this->assertSame('スケジュール report:daily・終了コード 1', Details::of($e)->summary);
-        $this->assertNoValues($e);
+        $body = $this->app?->make(Reporter::class)->body($e) ?? '';
+        $this->assertStringContainsString("[code]Scheduled command ['/home/deploy/php' 'artisan' report:daily --mail=（伏せた）] failed with exit code [1].[/code]", $body);
+        $this->assertStringNotContainsString('taro@example.com', $body);
     }
 
     #[Test]

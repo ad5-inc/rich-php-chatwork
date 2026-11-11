@@ -18,10 +18,11 @@
 | [0002](decisions/0002-depend-on-php-chatwork.md) | 送るところは ad5jp/php-chatwork に依存する |
 | [0003](decisions/0003-name-and-versioning.md) | 名前と版の付け方 |
 | [0004](decisions/0004-no-packagist.md) | Packagist に登録しない |
-| [0005](decisions/0005-message-not-sent-by-default.md) | 例外の文言は既定で送らない |
+| [0005](decisions/0005-message-not-sent-by-default.md) | 例外の文言は既定で送らない（0012 で置き換え） |
 | [0006](decisions/0006-goals-in-order.md) | ゴールを重要順に決め、ぶつかったら上を取る |
 | [0007](decisions/0007-message-by-kind.md) | メッセージは例外の種類で分ける（組み立て直す・許可リスト） |
 | [0008](decisions/0008-delivery.md) | 届けるための仕組み（最小の知らせ・送信の失敗・全体の上限・送り先が空の警告） |
 | [0009](decisions/0009-shared-room.md) | 送り先の部屋の分け方は部品の前提にしない |
 | [0010](decisions/0010-job-request-id.md) | ジョブの Request ID は例外の記録の後に戻す |
-| [0011](decisions/0011-omit-dumps.md) | 値の書き出しの形を含む文言は省く |
+| [0011](decisions/0011-omit-dumps.md) | 値の書き出しの形を含む文言は省く（0012 で置き換え） |
+| [0012](decisions/0012-always-send-message.md) | 例外の文言は必ず出し、設定は送り先だけにする |

@@ -50,7 +50,6 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 3. 当てる項目（文言・notice・前後のコード・リクエスト）を決める（[redaction.md](redaction.md#当てる項目)）
 4. 正規表現は `Text::replace()` を通す。失敗は null で返り、項目ごと省かれる
 
-使う側だけの規則なら、部品を直さず `message_redact_patterns` で足せる。
 
 ## Laravel を上げるときに確かめる所
 

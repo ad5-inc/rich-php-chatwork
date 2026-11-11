@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace Ad5\RichPhpChatwork;
 
 /**
- * ad5jp/php-chatwork で送る。Chatwork が応答しないとき、例外のハンドラーが止まらないよう timeout_seconds で切る
+ * ad5jp/php-chatwork で送る。Chatwork が応答しないとき、例外のハンドラーが止まり続けないよう 180 秒で切る
  */
 final class PhpChatworkTransport implements Transport
 {
-    public function __construct(private readonly float $timeout = 3.0)
+    public function __construct(private readonly float $timeout = 180.0)
     {
     }
 

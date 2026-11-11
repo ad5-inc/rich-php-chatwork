@@ -134,7 +134,6 @@ final class ExamplesTest extends TestCase
     #[Test]
     public function 例3_ジョブの中のTypeError(): void
     {
-        config(['rich-chatwork.send_message' => true]);
         $this->fixture->file('app/Jobs/SyncEmployeeJob.php', [28 => '$this->service->run($this->employeeId);']);
         $e = new TypeError('App\Services\Employee\SyncService::run(): Argument #1 ($employeeId) must be of type int, null given, called in ' . $this->fixture->path('app/Jobs/SyncEmployeeJob.php') . ' on line 28');
         self::fabricate($e, $this->fixture->path('app/Services/Employee/SyncService.php'), 15, [
@@ -198,7 +197,7 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title]アプリの行: 無し（vendor の Collection.php:NNN で投げた）
+            [info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title][code]Allowed memory size of 536870912 bytes exhausted (tried to allocate NNN bytes)[/code]アプリの行: 無し（vendor の Collection.php:NNN で投げた）
             コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
             呼び出しの並び: 取れない[/info]
