@@ -8,7 +8,7 @@
 
 | 入口 | 何が呼ぶか | 中身 |
 | --- | --- | --- |
-| `Reporter::report(Throwable)` | ServiceProvider が `Handler::reportable()` に登録した関数 | 記録する例外（`dontReport` に当たらない物）を送る。void を返し、関数の中全体を try で包むので、Laravel の元の記録は止まらない（`Handler::reportThrowable()` は callback を try で包まない） |
+| `Reporter::report(Throwable)` | ServiceProvider が例外のハンドラーの `reportable()` に登録した関数（`Handler` を継承しない Collision のハンドラーも `reportable()` を中の Handler に回すので、継承ではなく `reportable()` の有無で登録する。同じハンドラーには 1 度だけ） | 記録する例外（`dontReport` に当たらない物）を送る。void を返し、関数の中全体を try で包むので、Laravel の元の記録は止まらない（`Handler::reportThrowable()` は callback を try で包まない） |
 | `Reporter::notice(title, lines, key, code)` | 使う側のコード | 例外ではない知らせを送る |
 | `Reporter::body(Throwable)` | `log_when_silent` とテスト | 本文だけを作る（間引きの行は無し） |
 | キューと Context のイベント 8 つ | ServiceProvider が登録 | ジョブの入口の印と Request ID の入れ替えと戻し（`JobEntrance`） |
@@ -104,14 +104,15 @@ flowchart TD
 
 | 起きたこと | 動き | ログに書く物 |
 | --- | --- | --- |
-| メモリ切れ（`Allowed memory size of …` の FatalError） | 部品を動かす前に `memory_limit` を今の使用量＋32MB に上げる（`-1` なら触らない）。Laravel は 32KB しか空けずに `report()` を呼び、部品の callback が元の記録より先に動くため | なし |
+| ハンドラーに `reportable()` が無い | 登録しない | 警告を 1 度だけ |
+| メモリ切れ（`Allowed memory size of …` の FatalError） | 部品を動かす前に `memory_limit` を今の使用量＋32MB に上げる（`-1` なら触らない。今の上限がそれより大きければ下げない）。上げられなければ部品を動かさない。Laravel は 32KB しか空けずに `report()` を呼び、部品の callback が元の記録より先に動くため | なし |
 | `Reporter` を作れない（Transport の束縛が投げるなど） | 何もしない | 「例外を Chatwork に送れなかった」・部品の例外（生）・元の例外のクラス |
 | 設定が読めない（起動の途中など） | 何もしない | 同上と Request ID |
 | 伏せる処理が失敗（正規表現の誤り・上限） | その項目だけ省き、送る | なし |
 | 間引きのキーを作れない | 外側の例外のクラスと投げた場所でキーを作り、最小の知らせを送る | 「組み立てられなかった」・部品の例外（生）・元の例外のクラス・Request ID |
 | 本文を組み立てられない | 最小の知らせ（件名と Request ID、間引いた回数と上限の件数）を送る | 同上 |
 | 本文が 30,000 文字を超えた（落としても詰めても） | 件名の要約に「（長すぎて省いた。ログを見る）」を付けた知らせ（Request ID と回数の行だけ）に替える | なし（組み立ての失敗ではない） |
-| 送れない（Chatwork の障害・タイムアウト） | 間引きの印を消し、回数と上限の件数を戻す | 「送れなかった」・部品の例外（生）・元の例外のクラス・Request ID |
+| 送れない（Chatwork の障害・タイムアウト） | 間引きの印を消し、回数（送れなかった 1 回を足す）と上限の件数を戻す。次の知らせは「{時刻} から、送らずに N 回（送れなかった分を含む）」 | 「送れなかった」・部品の例外（生）・元の例外のクラス・Request ID |
 | キャッシュが投げる・値を持てない（NullStore・つながらない memcached） | その知らせの間は一時フォルダのファイルで間引く（同じサーバーの中だけ効く）。フォルダが自分の物でない・書き込めない・投げるならプロセスの中 | 置き場ごとに、プロセスごとに 1 度だけ |
 | 全体の上限を超えた | 送らず、間引きのキーごとに数えて次の知らせに足す | なし（元の例外はログにある） |
 | 送る環境で送り先が空 | 送らず、プロセスごとに 1 度だけ警告 | 警告 |
@@ -130,15 +131,18 @@ JobProcessing   Laravel の ContextServiceProvider が Context を payload の�
 失敗のイベント  JobExceptionOccurred か JobFailed（Worker は試行回数を超えると JobFailed が先）
                 → 入口（ジョブの名前・ID・発端の ID）を例外に結び付け、失敗の印を付ける（まだ戻さない）
 JobAttempted    process() の finally で出る。ワーカーでは report() より前なので何もしない。
-                sync のジョブ（SyncJob）だけ、ここで戻す（呼び出し側へ戻る所）
+                sync のジョブ（SyncJob）は、出した側に ID があればここで戻す（呼び出し側へ戻る所）。
+                出した側に ID が無ければ戻さず、ジョブの ID を残す（段も残す）
 report()        ワーカーは Worker::runJob() で、process() の後に呼ぶ。Context はジョブの ID のまま
                 sync は呼び出し側（HTTP など）で呼ぶ。結び付けた入口でジョブの行を出す
 Looping         ワーカーの次の周の頭。失敗したまま戻していないジョブを戻す（WorkerStopping でも）
+入口の終わり    CommandFinished・RequestHandled・アプリの terminating。sync で残したジョブの ID を戻す
+                （Context がもう別の値なら触らない）。次のジョブの processing() と settle() でも戻す
 JobProcessed    成功したら戻す
 ```
 
 - 戻すのはジョブごとに 1 回だけ（uuid で見分ける）。sync の入れ子では一番内側の入口を残す
 - sync で失敗して呼び出し側（HTTP など）で記録されたときは、ジョブの行を出し、Request ID を「{ジョブの ID}（ジョブの中のログ）」と「発端の Request ID: {記録した時の ID}（例外の記録はこの番号）」に分ける。最小の知らせも同じ番号を出す
-- 出した側に ID が無い sync で失敗したときは、JobAttempted で戻さずジョブの ID を Context に残す。呼び出し側の例外の記録もその番号になり、知らせの Request ID と揃う
+- 出した側に ID が無い sync で失敗したときは、JobAttempted で戻さずジョブの ID を Context に残し、入口の終わりで戻す。呼び出し側の例外の記録もその番号になり、知らせの Request ID と揃う。部品が残した ID は覚えておき、後のジョブの payload に写っても発端の ID には使わない（最大 100 個）
 - 戻さないまま次の JobProcessing が来たら（周の頭のイベントが無かった）、Laravel が Context を入れ替えた後（`ContextHydrated` が来た）なら印だけ捨てる。入れ替わっていなければ戻してから捨てる
 - 部品の JobProcessing は ContextServiceProvider より後に動く必要がある。パッケージの ServiceProvider は Laravel の基本の ServiceProvider より後に boot されるので満たしている（`JobEntranceTest` で固定）

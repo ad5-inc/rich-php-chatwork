@@ -59,8 +59,10 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 | vendor の所 | 頼っていること | 壊れたら |
 | --- | --- | --- |
 | `Illuminate/Foundation/Exceptions/Handler.php`（`reportThrowable`） | `reportable()` の callback を try で包まず、元の記録より先に呼ぶ（部品の側で包んでいる） | 部品が投げると元の例外が記録されない |
+| `nunomaduro/collision`（`Adapters/Laravel/ExceptionHandler`） | コンソールでテスト以外のとき Laravel のハンドラーを包む。`Handler` を継承しないが `reportable()` を中の Handler に回す | 部品が登録されず、コンソールで知らせが出ない |
 | `Illuminate/Foundation/Bootstrap/HandleExceptions.php` | メモリ切れのときに 32KB だけ空けて `report()` を呼ぶ（部品は callback の頭で上限を上げる） | メモリ切れで元の記録まで止まる（`MemoryExhaustionTest`） |
 | `Illuminate/Queue/Worker.php`（`process`・`handleJobException`・`runJob`・`daemonShouldRun`） | 失敗のイベント（`JobFailed`・`JobExceptionOccurred`）の後、`process()` の外の `runJob()` で `report()` を呼ぶ。`JobAttempted` は `process()` の finally で `report()` より前。`Looping` は周の頭に `until()` で出る | ジョブの行が出ない。ログと知らせの Request ID がずれる |
+| `Illuminate/Console/Events/CommandFinished.php`・`Illuminate/Foundation/Http/Events/RequestHandled.php` | 入口の終わり（sync で残したジョブの ID を戻す） | ジョブの ID が入口の後まで残る |
 | `Illuminate/Queue/SyncQueue.php`（`executeJob`・`handleException`） | 失敗のイベントの後、`JobAttempted`（finally）を出して例外を呼び出し元まで投げる。ジョブは `SyncJob` | 同上 |
 | `Illuminate/Log/Context/ContextServiceProvider.php` | `JobProcessing` で Context を payload の物に入れ替える（hydrate は flush してから入れる）。部品の listener はこれより後に動く | ジョブの Request ID がディスパッチした側の物に戻る |
 | `Illuminate/Database/QueryException.php` | 文言の末尾が ` (Connection: …, SQL: …)`。接続の詳細（Host・Port・Database）が文言に入る。`errorInfo` を previous から写す | 写された文言の規則 1・組み立てが当たらない |
@@ -73,7 +75,7 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 | `Illuminate/View/Engines/CompilerEngine.php` | ビューの例外を `ViewException` で包み、文言の末尾に ` (View: 絶対パス)` を付ける | 包んだビューが出ない |
 | `Symfony/Component/ErrorHandler/Error/FatalError.php` | 呼び出しの並びを渡さないと空になる | メモリ切れで「取れない」が出る（想定どおり） |
 
-PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。メモリ切れは別のプロセス（`tests/bin/exhaust-memory.php`）で起こして確かめる。そのスクリプトは Collision を避けて Laravel のハンドラーを使う（コンソールの Collision は Laravel のハンドラーを包み、部品の `reportable()` が登録されない）。テストの環境（`php:8.5-cli`）には intl が無く、全角を揃える処理は `mb_convert_kana()` の側を通る。intl のある環境の `Normalizer` の側は手で確かめる。
+PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。メモリ切れは別のプロセス（`tests/bin/exhaust-memory.php`）で起こして確かめる。そのスクリプトは `APP_ENV=production` にし、コンソールの Collision が Laravel のハンドラーを包んだ形で動かす（その形でも部品が登録されることを一緒に確かめる）。一時フォルダの持ち主は、スクリプトを別の利用者の物にして別のプロセスで確かめる（`tests/bin/fallback-owner.php`。root のときだけ）。テストの環境（`php:8.5-cli`）には intl が無く、全角を揃える処理は `mb_convert_kana()` の側を通る。intl のある環境の `Normalizer` の側は手で確かめる。
 
 ## リリース
 

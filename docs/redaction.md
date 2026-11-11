@@ -40,11 +40,15 @@
 
 ### 規則の細かい当たり方
 
-- **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana('KVas')` で英数字・記号・空白・半角カナを揃える。値の区切りになる全角の `，` `；` `＆` `｝` は揃える前に逃がし、値の中として扱う（`password=hun，ter2` の `ter2` を残さない）
+- **\u を戻す**: 伏せる前に JSON の `\uXXXX`（サロゲートの組も）を戻す（`json_encode` した「パスワード」のキーに当てるため。本文も戻した形で出る。制御文字・`"`・`\` は戻さない）
+- **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana('KVas')` で英数字・記号・空白・半角カナを揃え、`＂` `＇` `＼` も揃える。値の区切りになる全角の `，` `；` `＆` `｝` は揃える前に逃がし、値の中として扱う（`password=hun，ter2` の `ter2` を残さない）
 - **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。電話番号とマイナンバーの区切りは `-‐−ー－–—/`・空白・`.`・括弧。`+81` の後ろの `(0)` も許す。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
-- **規則 8 のキー**: `password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム`（大文字小文字を区別しない）
+- **規則 8 のキー**: `password|passwd|pwd|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム`（大文字小文字を区別しない）
   - 語の前に境界は求めない（`remember_token`・`XSRF-TOKEN` にも当たる）。語の後ろに `[A-Za-z0-9_-]*` が続いてよい（`password_confirmation`）
-  - キーの後ろは `\]?\\?['"]?\s*(=>|=|:|：)\s*`（print_r の `]`、エスケープした JSON の `\` を許す）。これが無ければ当てない
+  - `pass` は後ろに英小文字が続かないときだけ（`db_pass`・`smtp_pass` に当て、`passed`・`passenger` に当てない）
+  - キーの後ろは `(?:\]|%5D)?\\*['"]?\s*(=>|=|:|：)\s*`（print_r と http_build_query の `]`・`%5D`、何重にもエスケープした JSON の `\` を許す）。これが無ければ当てない
+  - 値が配列（print_r の `Array (`・var_export の `array (`・JSON の `[`・`{`）なら、対応する閉じ括弧まで伏せる（JSON は `"`、var_export は `'` の中の括弧を数えない）
+  - serialize の形（`s:8:"password";s:7:"…";`）は、書いてある長さだけ伏せる
   - 日本語のキーに限り、区切りに `は`・`「` も許す。値の終わりは空白か `」`・`。`
   - `Authorization` の値は、方式（Bearer・Token・Digest など）ごと行末か `,` まで
   - 値: 引用符で始まれば、エスケープを考えて閉じる引用符まで（無ければ末尾まで）。引用符が無ければ空白では止めず、行末か `,`・`;`・`&`・`}`・`)` の手前まで（伏せすぎる側を受け入れる）。値は引用符ごと「（伏せた）」にする
