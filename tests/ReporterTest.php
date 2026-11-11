@@ -814,7 +814,11 @@ final class ReporterTest extends TestCase
         $this->assertNotSame([], $files);
         foreach ($files as $file) {
             $this->assertSame('600', substr(sprintf('%o', $file->getPerms()), -3), 'キャッシュのファイルは持ち主だけ');
+            $this->assertSame('700', substr(sprintf('%o', (int) fileperms($file->getPath())), -3), 'フォルダは持ち主が辿れる（0600 だと root でない利用者は中に入れない）');
         }
+        $this->assertSame(1, count($this->transport->sent));
+        $this->reporter()->report(new RuntimeException('probe'));
+        $this->assertSame(1, count($this->transport->sent), '同じプロセスでも、ファイルの印で 2 度目を間引く');
 
         if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
             new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
@@ -1158,12 +1162,24 @@ final class ReporterTest extends TestCase
         $this->clearFallback();
     }
 
+    /**
+     * 前のテスト（や前の版）が残した予備の一時フォルダを消す。root でなくても消せるよう、先に自分の物の権限を戻す
+     */
     private function clearFallback(): void
     {
         $directory = Throttle::fallbackDirectory(dirname(__DIR__));
-        if (is_dir($directory)) {
-            new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
+        if (! is_dir($directory)) {
+            return;
         }
+
+        @chmod($directory, 0700);
+        $entries = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST, \RecursiveIteratorIterator::CATCH_GET_CHILD);
+        foreach ($entries as $entry) {
+            if ($entry instanceof \SplFileInfo) {
+                @chmod($entry->getPathname(), $entry->isDir() ? 0700 : 0600);
+            }
+        }
+        new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
     }
 
     private function failInVendor(): InvalidFormatException
