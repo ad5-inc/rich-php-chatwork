@@ -139,11 +139,11 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 
 送らないもの:
 
-- DB の例外の SQL・値・接続先（Host・Port・Database）、HTTP クライアントの例外の応答の本文・URL の問い合わせ・利用者情報
+- DB の例外の SQL・値・接続先（Host・Port・Database）、HTTP クライアントの例外の応答の本文・URL の問い合わせ・利用者情報、プロセスの例外のコマンドライン
 - 呼び出しの並びの引数の値（`getTraceAsString()` は php.ini しだいで引数の値を含むので使わない）
 - サーバーの絶対パス（相対パスにする。匿名クラス・クロージャの名前の中も）
 
-DB・HTTP クライアントの例外の文言の組み立て方と、伏せる規則の全部は [docs/redaction.md](docs/redaction.md)。
+DB・HTTP クライアント・プロセスの例外の文言の組み立て方と、伏せる規則の全部は [docs/redaction.md](docs/redaction.md)。
 
 **伏せる規則は「形のある秘密と個人情報」にしか当たらない。** 氏名・住所のような形の無い個人情報は伏せられない。`send_message` を true にするのは、送り先の部屋に入る人が文言を見てよいと決めたときだけにする。
 
