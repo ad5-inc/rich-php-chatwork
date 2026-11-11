@@ -13,9 +13,9 @@
 
 | 項目 | 当てる規則 | 固定しているテスト |
 | --- | --- | --- |
-| メッセージ（形の分からない例外） | 下の規則 1〜10 の全部 | `RedactorTest`・`ReporterTest` |
+| メッセージ（形の分からない例外） | 全角を揃えてから、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
 | メッセージ（形の分かる例外） | 組み立て直す（下の「組み立て直す例外」） | `KnownMessageTest` |
-| notice の行と枠 | 規則 1〜10 の全部 | `ReporterTest` |
+| notice の行と枠 | メッセージと同じ | `ReporterTest` |
 | 前後のコード | 規則 2〜5・7、鍵の形、規則 8（値が引用符で始まるときだけ） | `RedactorTest` |
 | リクエスト | 規則 6 だけ | `RedactorTest` |
 | 件名・種類・Request ID・アプリの行・呼び出しの並び | 当てない（値を含まない作りで守る） | `DetailsTest`・`NamesTest` |
@@ -26,30 +26,32 @@
 
 | 順 | 規則 | 伏せる例 | 伏せない例 |
 | --- | --- | --- | --- |
-| 1 | 別の例外が写した DB の文言 | `(Connection: mysql, Host: …, SQL: select … 'x(')` → `(Connection: mysql, SQL: （ログ）)`。末尾が切れて `(Connection: ` が無ければ `SQLSTATE[23000] （伏せた）`。許可リストの「伏せる所」もその場で伏せる | SQLSTATE・後ろの `(View: …)` の繰り返し |
+| 1 | 別の例外が写した DB の文言 | 最初の `(Connection: ` から後ろ: `(Connection: mysql, Host: …, SQL: select …)` → `(Connection: mysql, SQL: （ログ）)`。`, SQL: ` が無ければ（途中で切れた）そこから全部 `（伏せた）`。`(Connection: ` も無ければ `SQLSTATE[23000] （伏せた）`。前が接続の失敗なら `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ）` などの固定の言葉。許可リストの「伏せる所」もその場で伏せる | SQLSTATE・後ろの `(View: …)` の繰り返し |
 | 2 | JWT（`eyJ….….…`） | `jwt （伏せた）` | — |
 | 3 | パスワードのハッシュ（`$2y$…`・`$argon2id$…`） | `hash （伏せた）` | — |
 | 4 | `Bearer …`・`Basic …` | `Bearer （伏せた）` | — |
 | 5 | URL の利用者情報 | `https://（伏せた）@host.example/x` | `https://host.example/x` |
 | 6 | URL・パスの `?` 以降 | `GET /api/x?（伏せた）` | 前後のコードの `'/api/x?page=1'` |
-| 7 | メールアドレス | `to （伏せた） failed` | リクエストの中（規則 6 だけ） |
-| 7b | 電話番号（`0` で始まる 10〜11 桁）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`09012345678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
-| 8 | キーと値 | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
+| 7 | メールアドレス（`@` の代わりの `%40` も） | `to （伏せた） failed` | リクエストの中（規則 6 だけ） |
+| 7b | 電話番号（`0[1-9]` か `+81` で始まる 10〜11 桁）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`０３－１２３４－５６７８`・`+81 90-1234-5678`・`(03)1234-5678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・`0012345678` のような 0 埋めの番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
+| 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
 | 9 | 長い英数字 | 32 文字以上の 16 進・base64 のトークン・`session_{40 文字の 16 進}`・文の終わりが `.` のトークン | 長い snake_case・長いクラス名・UUID・`storage/app/{32 文字}.pdf` |
 | 10 | 使う側の `message_redact_patterns` | 当たった所 | — |
 
 ### 規則の細かい当たり方
 
-- **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
-- **規則 8 のキー**: `password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session`（大文字小文字を区別しない）
+- **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana()` で英数字・記号・空白だけ揃える
+- **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。電話番号の区切りは `-‐−ー－`・空白・`.`・括弧。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
+- **規則 8 のキー**: `password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|パスワード|暗証番号|トークン`（大文字小文字を区別しない）
   - 語の前に境界は求めない（`remember_token`・`XSRF-TOKEN` にも当たる）。語の後ろに `[A-Za-z0-9_-]*` が続いてよい（`password_confirmation`）
-  - キーの後ろは `['"]?\s*(=>|=|:)\s*`。これが無ければ当てない
-  - 値: 引用符で始まれば、エスケープを考えて閉じる引用符まで（無ければ末尾まで）。引用符が無ければ空白・`,`・`;`・`&`・`}`・`)` の手前まで。値は引用符ごと「（伏せた）」にする
+  - キーの後ろは `['"]?\s*(=>|=|:|：)\s*`。これが無ければ当てない
+  - `Authorization` の値は、方式（Bearer・Token・Digest など）ごと行末か `,` まで
+  - 値: 引用符で始まれば、エスケープを考えて閉じる引用符まで（無ければ末尾まで）。引用符が無ければ空白では止めず、行末か `,`・`;`・`&`・`}`・`)` の手前まで（伏せすぎる側を受け入れる）。値は引用符ごと「（伏せた）」にする
   - `session_lifetime: 120` のような伏せなくてよい値も伏せる
 - **規則 9 の境界**: 前が英数字・`_`・`\`・`.`・`-` でない所。後ろは英数字・`_`・`-` でなく、`.` なら後ろに英数字が続かない所
   - base64 は `[A-Za-z0-9+_-]{32,}={0,2}` で、英字と数字を両方含み数字が 3 個以上の物だけ
   - UUID の形と、どの区切りも 16 文字未満の snake_case は外す
-- **前後のコードだけの鍵の形**: `sk_live_…`・`AKIA…`・`AIza…`・`xox[abp]-…`・`gh[pousr]_…`・`-----BEGIN … PRIVATE KEY-----`（その行の末尾まで）
+- **鍵の形**（前後のコード・メッセージ・notice）: `sk_live_…`・`AKIA…`・`AIza…`・`xox[abp]-…`・`gh[pousr]_…`・`-----BEGIN … PRIVATE KEY-----`（その行の末尾まで）
 - **失敗したら**: 正規表現が失敗したら（パターンの誤り・バックトラックの上限）、その項目を「（伏せられなかったので省いた。ログを見る）」にする。元の値には戻さない
 
 ## 組み立て直す例外
@@ -60,7 +62,7 @@
 | --- | --- |
 | ドライバーの文言が許可リストに当たる | `SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)` |
 | 許可リストに当たらない（権限の不足 1142 など） | `SQLSTATE[42000] ドライバー 1142（文言はログ） (Connection: mysql)` |
-| 接続の失敗（SQLSTATE `08xxx`、または `HY000` でドライバー 2002・2006・1045） | `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql)`。2002 で名前が引けないときは `名前が引けない`、ほかは `接続できない` |
+| 接続の失敗（SQLSTATE `08xxx`、または `HY000` でドライバー 2002・2006・1045。`Details::CONNECTION_FAILURE_DRIVERS`） | `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql)`。2002 で名前が引けないときは `名前が引けない`、ほかは `接続できない` |
 | previous が PDOException でない | `SQLSTATE[HY000] （文言はログ） (Connection: mysql)` |
 
 - SQLSTATE とドライバーの番号は、previous の PDOException の `errorInfo` から取る。無ければ文言の頭の `SQLSTATE[…]`・`[番号]` から取る（接続の失敗では `getCode()` が番号になるので使わない）

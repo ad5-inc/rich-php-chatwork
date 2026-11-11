@@ -58,16 +58,19 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 
 | vendor の所 | 頼っていること | 壊れたら |
 | --- | --- | --- |
-| `Illuminate/Queue/Worker.php`（`process`・`handleJobException`・`runJob`） | 失敗のイベント（`JobFailed`・`JobExceptionOccurred`）の後で `report()` を呼ぶ。試行回数を超えると `JobFailed` が先 | ジョブの行と Request ID が出ない |
-| `Illuminate/Queue/SyncQueue.php`（`executeJob`・`handleException`） | 同上。例外は呼び出し元まで投げられる | 同上 |
+| `Illuminate/Foundation/Exceptions/Handler.php`（`reportThrowable`） | `reportable()` の callback を try で包まない（部品の側で包んでいる） | 部品が投げると元の例外が記録されない |
+| `Illuminate/Queue/Worker.php`（`process`・`handleJobException`・`runJob`・`daemonShouldRun`） | 失敗のイベント（`JobFailed`・`JobExceptionOccurred`）の後、`process()` の外の `runJob()` で `report()` を呼ぶ。`JobAttempted` は `process()` の finally で `report()` より前。`Looping` は周の頭に `until()` で出る | ジョブの行が出ない。ログと知らせの Request ID がずれる |
+| `Illuminate/Queue/SyncQueue.php`（`executeJob`・`handleException`） | 失敗のイベントの後、`JobAttempted`（finally）を出して例外を呼び出し元まで投げる。ジョブは `SyncJob` | 同上 |
 | `Illuminate/Log/Context/ContextServiceProvider.php` | `JobProcessing` で Context を payload の物に入れ替える（hydrate は flush してから入れる）。部品の listener はこれより後に動く | ジョブの Request ID がディスパッチした側の物に戻る |
 | `Illuminate/Database/QueryException.php` | 文言の末尾が ` (Connection: …, SQL: …)`。接続の詳細（Host・Port・Database）が文言に入る。`errorInfo` を previous から写す | 写された文言の規則 1・組み立てが当たらない |
 | `Illuminate/Http/Client/RequestException.php`・`Response.php` | `response->status()`・`effectiveUri()`・`transferStats` | URL が出ず `HTTP {状態}` だけになる |
 | `Illuminate/Http/Client/PendingRequest.php` | `ConnectionException` の previous が Guzzle の例外 | ホストが出ない |
+| `Illuminate/Cache/FileStore.php` | `add()` が flock で排他する（予備の一時フォルダの印） | プロセスをまたいだ間引きが効かない |
+| `Illuminate/Log/Context/ContextLogProcessor.php` | ログに Context（`request_id`）を付ける | ログと知らせの Request ID を揃える前提が崩れる |
 | `Illuminate/View/Engines/CompilerEngine.php` | ビューの例外を `ViewException` で包み、文言の末尾に ` (View: 絶対パス)` を付ける | 包んだビューが出ない |
 | `Symfony/Component/ErrorHandler/Error/FatalError.php` | 呼び出しの並びを渡さないと空になる | メモリ切れで「取れない」が出る（想定どおり） |
 
-PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。
+PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。テストの環境（`php:8.5-cli`）には intl が無く、全角を揃える処理は `mb_convert_kana()` の側を通る。intl のある環境の `Normalizer` の側は手で確かめる。
 
 ## リリース
 

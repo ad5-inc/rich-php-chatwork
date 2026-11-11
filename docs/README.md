@@ -22,4 +22,5 @@
 | [0006](decisions/0006-goals-in-order.md) | ゴールを重要順に決め、ぶつかったら上を取る |
 | [0007](decisions/0007-message-by-kind.md) | メッセージは例外の種類で分ける（組み立て直す・許可リスト） |
 | [0008](decisions/0008-delivery.md) | 届けるための仕組み（最小の知らせ・送信の失敗・全体の上限・送り先が空の警告） |
-| [0009](decisions/0009-shared-room.md) | 送り先の部屋は案件ごとに分けることを部品の前提にしない |
+| [0009](decisions/0009-shared-room.md) | 送り先の部屋の分け方は部品の前提にしない |
+| [0010](decisions/0010-job-request-id.md) | ジョブの Request ID は例外の記録の後に戻す |
