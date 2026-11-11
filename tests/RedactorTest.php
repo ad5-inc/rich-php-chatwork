@@ -1,0 +1,319 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ad5\RichPhpChatwork\Tests;
+
+use Ad5\RichPhpChatwork\Redactor;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\TestCase as PlainTestCase;
+
+/**
+ * 伏せる規則。規則ごとに、伏せる例と伏せない例を並べる
+ */
+final class RedactorTest extends PlainTestCase
+{
+    private const HEX32 = '0123456789abcdef0123456789abcdef';
+
+    private const HEX40 = '0123456789abcdef0123456789abcdef01234567';
+
+    /** 英字と数字が混ざった作り物のトークン（数字は 3 個以上） */
+    private const TOKEN = 'ProbeValueAbcDef123GhiJklMnoPqrStu';
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function redacted(): iterable
+    {
+        yield 'JSON の password' => ['{"password":"p@ss word"}', '{"password":（伏せた）}'];
+        yield '引用符を逃がした値' => ['{"token":"a\"b"}', '{"token":（伏せた）}'];
+        yield 'PHP の配列' => ["'password' => 'x'", "'password' => （伏せた）"];
+        yield 'PHP の代入' => ["\$secret = 'x'", '$secret = （伏せた）'];
+        yield '閉じる引用符が無い' => ['{"access_token":"abc def (truncated...)', '{"access_token":（伏せた）'];
+        yield '続きのあるキー' => ['{"password":"x","password_confirmation":"y"}', '{"password":（伏せた）,"password_confirmation":（伏せた）}'];
+        yield '大文字のキー' => ['XSRF-TOKEN=abc123; path=/', 'XSRF-TOKEN=（伏せた）; path=/'];
+        yield '引用符の無い値' => ['remember_token: probe-value, next', 'remember_token: （伏せた）, next'];
+        // 秘密の形の値は、読み取りの道具に本物と間違われないよう、つないで作る
+        yield 'JWT' => ['jwt ' . 'eyJ' . 'probeHeader.' . 'eyJ' . 'probeBody.probeSign here', 'jwt （伏せた） here'];
+        yield 'bcrypt' => ['hash $2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234 end', 'hash （伏せた） end'];
+        yield 'argon2id' => ['hash $argon2id$v=19$m=65536,t=4,p=1$c2FsdA$aGFzaA end', 'hash （伏せた） end'];
+        yield 'Bearer' => ['header Bearer abc.def-ghi end', 'header Bearer （伏せた） end'];
+        yield 'メールアドレス' => ['to probe.user@example.test failed', 'to （伏せた） failed'];
+        yield 'URL の利用者情報と ? 以降' => ['GET https://user:pass@host.example/x?token=y failed', 'GET https://（伏せた）@host.example/x?（伏せた） failed'];
+        yield '16 進 32 文字' => ['key ' . self::HEX32 . ' end', 'key （伏せた） end'];
+        yield 'base64 のトークン' => ['key ' . self::TOKEN . '== end', 'key （伏せた） end'];
+        yield 'session と 16 進 40 文字' => ['file session_' . self::HEX40 . ' end', 'file （伏せた） end'];
+        yield '文の終わりが . のトークン' => ['key is ' . self::TOKEN . '.', 'key is （伏せた）.'];
+        yield '文の終わりが . の 16 進' => ['key is ' . self::HEX32 . '. next', 'key is （伏せた）. next'];
+        yield '電話番号（区切りあり）' => ['電話 03-1234-5678 まで', '電話 （伏せた） まで'];
+        yield '電話番号（区切りなし）' => ['tel:09012345678', 'tel:（伏せた）'];
+        yield 'マイナンバー（区切りあり）' => ['番号 1234 5678 9012 を', '番号 （伏せた） を'];
+        yield 'マイナンバー（区切りなし）' => ['番号 123456789012 を', '番号 （伏せた） を'];
+        yield '口座番号' => ['口座番号: 1234567', '口座番号: （伏せた）'];
+        yield 'account の後ろの 7 桁' => ['bank account no. 7654321 failed', 'bank account no. （伏せた） failed'];
+        yield '全角の電話番号（NFKC で揃えてから当てる）' => ['電話 ０３－１２３４－５６７８ まで', '電話 （伏せた） まで'];
+        yield '+81 の電話番号' => ['tel +81 90-1234-5678 end', 'tel （伏せた） end'];
+        yield '括弧の電話番号' => ['tel (03)1234-5678 end', 'tel （伏せた） end'];
+        yield '. で区切った電話番号' => ['tel 03.1234.5678 end', 'tel （伏せた） end'];
+        yield '長音で区切った電話番号' => ['tel 090ー1234ー5678 end', 'tel （伏せた） end'];
+        yield '%40 のメールアドレス' => ['to probe.user%40example.test failed', 'to （伏せた） failed'];
+        yield '全角の＠のメールアドレス' => ['to probe.user＠example.test failed', 'to （伏せた） failed'];
+        yield 'Authorization の方式ごと' => ['Authorization: Token probe-value next, rest', 'Authorization: （伏せた）, rest'];
+        yield 'Authorization の Digest' => ['Authorization: Digest username="probe", response="' . self::HEX32 . '"', 'Authorization: （伏せた）, response="（伏せた）"'];
+        yield '全角のコロン' => ['パスワード：probe value', 'パスワード:（伏せた）'];
+        yield '日本語のキー' => ['暗証番号: 9876, トークン=probe-value', '暗証番号: （伏せた）, トークン=（伏せた）'];
+        yield '引用符の無い値は空白で止めない' => ['password=probe value here, next', 'password=（伏せた）, next'];
+        yield 'print_r の形' => ["Array\n(\n    [password] => hunter2\n    [api_token] => abc123\n)", "Array\n(\n    [password] => （伏せた）\n    [api_token] => （伏せた）\n)"];
+        yield '角括弧のキー' => ['user[password]=hunter2&user[name]=a', 'user[password]=（伏せた）&user[name]=a'];
+        yield 'エスケープした JSON' => ['{"data":"{\\"password\\":\\"hunter2\\"}"}', '{"data":"{\\"password\\":（伏せた）}"}'];
+        yield '日本語のキーと「は」' => ['パスワードは hunter2 です', 'パスワードは （伏せた） です'];
+        yield '日本語のキーと「」' => ['確認コード「123456」を入れる', '確認コード「（伏せた）」を入れる'];
+        yield 'ワンタイムのキー' => ['otp=123456, verification_code: 654321', 'otp=（伏せた）, verification_code: （伏せた）'];
+        yield '全角の区切りでも値が途切れない' => ['password=hun，ter2 rest', 'password=（伏せた）'];
+        yield '半角カナも揃える' => ['ﾊﾟｽﾜｰﾄﾞ: probe', 'パスワード: （伏せた）'];
+        yield '+81 の後ろの (0)' => ['tel +81 (0)90-1234-5678 end', 'tel （伏せた） end'];
+        yield '– と / で区切った電話番号' => ['tel 03–1234/5678 end', 'tel （伏せた） end'];
+        yield '. で区切ったマイナンバー' => ['番号 1234.5678.9012 を', '番号 （伏せた） を'];
+        yield 'Guzzle の ConnectException の Slack' => [
+            "cURL error 7: Failed to connect to hooks.slack.example port 443 after 3 ms: Couldn't connect to server (see https://curl.haxx.se/libcurl/c/libcurl-errors.html) for https://hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12",
+            "cURL error 7: Failed to connect to hooks.slack.example port 443 after 3 ms: Couldn't connect to server (see https://curl.haxx.se/libcurl/c/{…}) for https://hooks.slack.example/services/{…}/{…}/{…}",
+        ];
+        yield 'file_get_contents の Discord' => [
+            'file_get_contents(https://discord.com/api/webhooks/123456789012345678/Probe-Secret_Probe-Secret): Failed to open stream: HTTP request failed!',
+            'file_get_contents(https://discord.com/api/webhooks/{…}/{…}): Failed to open stream: HTTP request failed!',
+        ];
+        yield 'Telegram の URL' => ['request to https://api.telegram.org/bot123456:PROBE-probe/sendMessage failed', 'request to https://api.telegram.org/{…}/{…} failed'];
+        yield 'クレジットカード（区切りなし）' => ['card 4111111111111111 end', 'card （伏せた） end'];
+        yield 'クレジットカード（-）' => ['card 4111-1111-1111-1111 end', 'card （伏せた） end'];
+        yield 'クレジットカード（空白）' => ['card 4111 1111 1111 1111 end', 'card （伏せた） end'];
+        yield 'キーの値が URL' => ['login failed password=https://host.example/12/ hunter2secret', 'login failed password=（伏せた）'];
+        yield 'キーの値が URL の後ろに続く' => ['token_endpoint: https://login.example.com/123e4567-e89b-12d3-a456-426614174000/oauth2/token probe-secret-9', 'token_endpoint: （伏せた）'];
+        yield 'バッククォートで囲んだ URL' => ['Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response', 'Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response'];
+        yield '文の終わりの . の前の URL' => ['GET https://api.example.com/v1/users. Retry', 'GET https://api.example.com/v1/users. Retry'];
+        yield '日本語が続く URL' => ['https://api.example.com/v1/users/12345です', 'https://api.example.com/v1/users/{…}です'];
+        yield '角括弧で囲んだ URL' => ['Webhook [https://hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecret12] failed', 'Webhook [https://hooks.slack.example/services/{…}/{…}/{…}] failed'];
+        yield '! で終わる URL' => ['GET https://api.example.com/v1/users/42!', 'GET https://api.example.com/v1/users/{…}!'];
+        yield '/ と \\/ が混ざる URL' => ['GET https://api.example.com/v1/a\\/b/12345 end', 'GET https://api.example.com/v1/a\\/b/{…} end'];
+        yield '// で始まるスキームの無い URL' => ['src //hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecret12 end', 'src //hooks.slack.example/services/{…}/{…}/{…} end'];
+        yield 'ポートのあるスキームの無い URL' => ['post hooks.example.com:8443/hook/T0PROBE01 end', 'post hooks.example.com:8443/hook/{…} end'];
+        yield '途中に ] がある URL のパス' => ['GET https://api.example.com/hook/abc]/Secret12 end', 'GET https://api.example.com/hook/{…}/{…} end'];
+        yield '\\/\\/ で始まるスキームの無い URL' => ['src \\/\\/hooks.slack.example\\/services\\/T0PROBE01\\/B0PROBE02\\/ProbeSecret12 end', 'src \\/\\/hooks.slack.example\\/services\\/{…}\\/{…}\\/{…} end'];
+        yield 'ホストの後ろが \\/ のスキームの無い URL' => ['post hooks.slack.example\\/services\\/T0PROBE01 end', 'post hooks.slack.example\\/services\\/{…} end'];
+        yield 'Amex' => ['card 3782 822463 10005 end', 'card （伏せた） end'];
+        yield 'Diners' => ['card 3056-930902-5904 end', 'card （伏せた） end'];
+        yield 'スキームの無い URL' => ['post to hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12 failed', 'post to hooks.slack.example/services/{…}/{…}/{…} failed'];
+        yield '\\/ でエスケープした URL' => ['url https:\\/\\/hooks.slack.example\\/services\\/T0PROBE01\\/B0PROBE02\\/ProbeSecretProbeSecret12 end', 'url https:\\/\\/hooks.slack.example\\/services\\/{…}\\/{…}\\/{…} end'];
+        yield '%3D と %3A の区切り' => ['password%3Dprobe-1&token%3aprobe-2', 'password%3D（伏せた）&token%3a（伏せた）'];
+        yield 'pw のキー' => ['pw=hunter2, next', 'pw=（伏せた）, next'];
+        yield 'passphrase と passcode' => ['passphrase=probe-1, passcode: 1234', 'passphrase=（伏せた）, passcode: （伏せた）'];
+        yield 'リストの添字' => ['password[0]=probe-2&token[]=probe-3&tokens%5B0%5D=probe-4&name=a', 'password[0]=（伏せた）&token[]=（伏せた）&tokens%5B0%5D=（伏せた）&name=a'];
+        yield '文言の中の鍵の形' => ['key AK' . 'IA' . str_repeat('PROBE', 3) . '1 rejected', 'key （伏せた） rejected'];
+    }
+
+    #[Test]
+    #[DataProvider('redacted')]
+    public function 伏せる(string $text, string $expected): void
+    {
+        $this->assertSame($expected, $this->redactor()->message($text));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function kept(): iterable
+    {
+        yield 'CSRF の文言' => ['CSRF token mismatch.'];
+        yield '検証の文言' => ['The token field is required.'];
+        yield '長い snake_case' => ['employee_evaluation_item_score_2024_version_history_id'];
+        yield '長いクラス名' => ['App\UseCase\Actions\Employee\Evaluation\VeryLongActionNameForProbe2024Handler'];
+        yield 'UUID' => ['id 123e4567-e89b-12d3-a456-426614174000 end'];
+        yield 'パスの区切り' => ['storage/app/' . self::HEX32 . '.pdf'];
+        yield 'SQLSTATE・HTTP の状態・行番号' => ['state 22001 HTTP 503 at line 1234 at row 1'];
+        yield '7 桁でない口座の後ろ' => ['口座の数 12 件'];
+        yield '0 埋めの社員コード' => ['社員 0012345678 の更新'];
+        yield 'pw で始まる語' => ['pwned=3'];
+        yield 'URL のパス' => ['https://host.example/x'];
+        yield '列とキーの名前' => ["for column 'name' and for key 'employees.code'"];
+    }
+
+    #[Test]
+    #[DataProvider('kept')]
+    public function 伏せない(string $text): void
+    {
+        $this->assertSame($text, $this->redactor()->message($text));
+    }
+
+    /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function structured(): iterable
+    {
+        $request = \Illuminate\Http\Request::create('/', 'GET', server: ['PHP_AUTH_USER' => 'probe', 'PHP_AUTH_PW' => 'probe-pw-1']);
+        $headers = ['headers' => ['X-Api-Key' => ['k1234567'], 'Cookie' => ['sid=abcd1234']]];
+
+        yield 'Basic 認証の要求の headers' => [(string) json_encode($request->headers->all()), ['probe-pw-1', 'cHJvYmU']];
+        yield 'db_pass と smtp_pass' => [(string) json_encode(['db_pass' => 'probe-db-1', 'smtp_pass' => 'probe-smtp-1', 'passed' => 'kept-1']), ['probe-db-1', 'probe-smtp-1']];
+        yield 'http_build_query' => [http_build_query(['user' => ['email_x' => 'a', 'password' => 'probe-pw-2'], 'api_token' => 'probe-tk-2']), ['probe-pw-2', 'probe-tk-2']];
+        yield 'print_r の配列の値' => [print_r($headers, true), ['k1234567', 'abcd1234']];
+        yield 'var_export の配列の値' => [var_export($headers, true), ['k1234567', 'abcd1234']];
+        yield 'JSON_PRETTY_PRINT の配列の値' => [(string) json_encode($headers, JSON_PRETTY_PRINT), ['k1234567', 'abcd1234']];
+        yield '\\u で書いた日本語のキー' => [(string) json_encode(['パスワード' => 'probe-pw-3']), ['probe-pw-3']];
+        yield 'serialize' => [serialize(['password' => 'probe "x"; pw-4', 'name' => 'a']), ['probe', 'pw-4']];
+        yield '3 重にエンコードした JSON' => [(string) json_encode(json_encode(json_encode(['password' => 'probe-pw-5']))), ['probe-pw-5']];
+    }
+
+    /**
+     * @param list<string> $secrets
+     */
+    #[Test]
+    #[DataProvider('structured')]
+    public function 形のある書き出しの中の値を伏せる(string $text, array $secrets): void
+    {
+        $redacted = (string) $this->redactor()->message($text);
+
+        foreach ($secrets as $secret) {
+            $this->assertStringNotContainsString($secret, $redacted);
+        }
+        $this->assertStringContainsString(Redactor::MARK, $redacted);
+    }
+
+    #[Test]
+    public function 伏せない語は残す(): void
+    {
+        $this->assertStringContainsString('kept-1', (string) $this->redactor()->message((string) json_encode(['passed' => 'kept-1', 'passenger' => 'kept-2'])));
+        $this->assertStringContainsString('"name":"a"', (string) $this->redactor()->message('{"password":"x","name":"a"}'));
+    }
+
+    #[Test]
+    public function http_build_queryの出力そのもの(): void
+    {
+        $this->assertSame(
+            'user%5Bemail_x%5D=a&user%5Bpassword%5D=（伏せた）&api_token=（伏せた）',
+            $this->redactor()->message(http_build_query(['user' => ['email_x' => 'a', 'password' => 'hunter2'], 'api_token' => 'abc'])),
+        );
+    }
+
+    #[Test]
+    public function 配列の値は閉じ括弧まで伏せ_後ろは残す(): void
+    {
+        $this->assertSame('{"Cookie":（伏せた）,"name":"a"}', $this->redactor()->message('{"Cookie":["sid=abcd1234",{"x":"]"}],"name":"a"}'));
+    }
+
+    #[Test]
+    public function 全角の引用符とバックスラッシュも揃える(): void
+    {
+        $this->assertSame('{"password":（伏せた）}', $this->redactor()->message('{＂password＂:＂probe＂}'));
+    }
+
+    #[Test]
+    public function 写されたDBの文言は_entryの値だけを伏せる(): void
+    {
+        $this->assertSame(
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '（伏せた）' for key 'employees.code' (Connection: mysql, SQL: （ログ）)",
+            $this->redactor()->message("SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '試験太郎-2026' for key 'employees.code' (Connection: mysql, SQL: insert into employees (code) values ('試験太郎-2026'))"),
+        );
+        $this->assertSame(
+            "Duplicate entry '（伏せた）' for key 'employees.code'",
+            $this->redactor()->message("Duplicate entry 'O'Probe-2026' for key 'employees.code'"),
+        );
+    }
+
+    #[Test]
+    public function 写されたDBの文言は_nearの後ろと値を伏せ_列の名前は残す(): void
+    {
+        $this->assertSame(
+            "You have an error in your SQL syntax; check the manual for the right syntax to use near '（伏せた）' at line 1",
+            $this->redactor()->message("You have an error in your SQL syntax; check the manual for the right syntax to use near '= 'secret123'' at line 1"),
+        );
+        $this->assertSame(
+            "Incorrect integer value: '（伏せた）' for column 'age' at row 1",
+            $this->redactor()->message("Incorrect integer value: 'probe-value' for column 'age' at row 1"),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function copiedQueryMessages(): iterable
+    {
+        $head = "SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause'";
+        $details = 'Connection: mysql, Host: db.internal, Port: 3306, Database: probe_db';
+
+        yield '値に ( だけ' => ["{$head} ({$details}, SQL: select * from t where a = 'x(' and b = 1)", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield '値に ) だけ' => ["{$head} ({$details}, SQL: select * from t where a = 'x)' and b = 1)", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield 'View の 2 段' => [
+            "{$head} ({$details}, SQL: select * from t where a = 'x') (View: resources/views/a.blade.php) (View: resources/views/a.blade.php)",
+            "{$head} (Connection: mysql, SQL: （ログ）) (View: resources/views/a.blade.php) (View: resources/views/a.blade.php)",
+        ];
+        yield '末尾が切れて SQL の途中まで' => ["{$head} ({$details}, SQL: select * from t where a = 'x", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield '末尾が切れて Connection も無い' => ["SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'zz' for ke", 'SQLSTATE[23000] （伏せた）'];
+        yield 'Connection の途中で切れた' => ["{$head} (Connection: mysql, Host: db.internal, Port: 33", "{$head} （伏せた）"];
+        yield '写された 1045' => [
+            "SQLSTATE[HY000] [1045] Access denied for user 'probe-user'@'10.0.0.1' (using password: YES) ({$details}, SQL: select 1)",
+            'SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql, SQL: （ログ）)',
+        ];
+        yield '写された 2002' => [
+            "SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for db.internal failed: Name or service not known ({$details}, SQL: select 1)",
+            'SQLSTATE[HY000] [2002] 名前が引けない（詳細はログ） (Connection: mysql, SQL: （ログ）)',
+        ];
+        yield '値に Connection と SQL を含む' => [
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: x' for key 'k' ({$details}, SQL: insert into t values ('v (Connection: a, SQL: x'))",
+            'SQLSTATE[23000] （伏せた） (Connection: a, SQL: （ログ）)',
+        ];
+        yield '写された 1044' => ["SQLSTATE[HY000] [1044] Access denied for user 'probe-user'@'%' to database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1044] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 1049' => ["SQLSTATE[HY000] [1049] Unknown database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1049] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 1130' => ["SQLSTATE[HY000] [1130] Host '10.0.0.1' is not allowed to connect ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1130] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 2003' => ["SQLSTATE[HY000] [2003] Can't connect to MySQL server on 'db.internal' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [2003] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 2005' => ["SQLSTATE[HY000] [2005] Unknown MySQL server host 'db.internal' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [2005] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'pgsql の Key' => ["SQLSTATE[23505]: Unique violation: 7 ERROR:  duplicate key value violates unique constraint \"users_api_token_unique\" DETAIL:  Key (api_token)=(probe-secret) already exists. ({$details}, SQL: insert into users)", 'SQLSTATE[23505] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'pgsql の Failing row' => ["SQLSTATE[23502]: Not null violation: 7 ERROR:  null value in column \"name\" DETAIL:  Failing row contains (1, probe-value). ({$details}, SQL: insert into users)", 'SQLSTATE[23502] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'パスの形でないビューは残さない' => ["{$head} ({$details}, SQL: select 1) (View: probe-secret)", "{$head} (Connection: mysql, SQL: （ログ）)"];
+    }
+
+    #[Test]
+    #[DataProvider('copiedQueryMessages')]
+    public function 包む例外の一覧に無い例外が写したDBの文言も伏せ_SQLSTATEは残す(string $message, string $expected): void
+    {
+        $this->assertSame('Wrapped: ' . $expected, $this->redactor()->message('Wrapped: ' . $message), 'RuntimeException などが写した形');
+    }
+
+    #[Test]
+    public function 使う側の規則を足せ_失敗したらnullを返す(): void
+    {
+        $this->assertSame('社員 （伏せた） の更新', new Redactor(['/P-\d{4}/'])->message('社員 P-1234 の更新'));
+        $this->assertNull(new Redactor(['/(/'])->message('社員 P-1234 の更新'));
+    }
+
+    #[Test]
+    public function 前後のコードは形のはっきりした物と_文字列の値だけを伏せる(): void
+    {
+        $redactor = $this->redactor();
+
+        $this->assertSame('$secret = （伏せた）;', $redactor->snippet("\$secret = 'sk_test_probe';"));
+        $this->assertSame("'password' => （伏せた）,", $redactor->snippet("'password' => 'probe-pass',"));
+        // 秘密の形の値は、読み取りの道具に本物と間違われないよう、つないで作る
+        $this->assertSame('$key = （伏せた）;', $redactor->snippet('$key = sk_' . 'live_ProbeValue123;'));
+        $this->assertSame('$aws = （伏せた）;', $redactor->snippet('$aws = AK' . 'IA' . str_repeat('PROBE', 3) . '1;'));
+        $this->assertSame('$g = （伏せた）;', $redactor->snippet('$g = AI' . 'za' . str_repeat('Probe', 6) . '12345;'));
+        $this->assertSame('$s = （伏せた）;', $redactor->snippet('$s = xo' . 'xb-1234-probe;'));
+        $this->assertSame('$h = （伏せた）;', $redactor->snippet('$h = gh' . 'p_' . str_repeat('Probe', 4) . '1234;'));
+        $this->assertSame('（伏せた）', $redactor->snippet('-----BEGIN RSA ' . 'PRIVATE KEY-----'));
+        $this->assertSame('$password = $request->password;', $redactor->snippet('$password = $request->password;'));
+        $this->assertSame("\$tel = '03-1234-5678';", $redactor->snippet("\$tel = '03-1234-5678';"), '電話番号などは前後のコードに当てない');
+        $this->assertSame("\$url = '/api/x?page=1';", $redactor->snippet("\$url = '/api/x?page=1';"), 'URL の問い合わせは当てない');
+        $this->assertSame('$id = \'' . self::HEX32 . '\';', $redactor->snippet('$id = \'' . self::HEX32 . '\';'), '長い英数字は当てない');
+    }
+
+    #[Test]
+    public function リクエストはURLの問い合わせだけを伏せる(): void
+    {
+        $this->assertSame('GET /api/x?（伏せた）', $this->redactor()->request('GET /api/x?token=y&page=2'));
+        $this->assertSame('GET /api/users/probe@example.test', $this->redactor()->request('GET /api/users/probe@example.test'));
+    }
+
+    private function redactor(): Redactor
+    {
+        return new Redactor([]);
+    }
+}
