@@ -620,7 +620,7 @@ final class ReporterTest extends TestCase
         $this->travelTo(new \DateTimeImmutable('2026-11-11 14:06:00'));
         $this->reporter()->report($e);
 
-        $this->assertStringContainsString("同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 2 回。上限で送らなかった 3 回（14:05 から）\n", $this->transport->sent[array_key_last($this->transport->sent)]['body']);
+        $this->assertStringContainsString("同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 2 回。上限で送らなかった 3 回（14:05 から）\n", (end($this->transport->sent) ?: ['body' => ''])['body']);
     }
 
     #[Test]
