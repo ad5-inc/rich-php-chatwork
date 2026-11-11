@@ -69,7 +69,7 @@ REPORT_CHATWORK_ROOM_ID=
 | `snippet_paths` | `['app/', 'routes/']` | 前後のコードを読むフォルダ。ここの外のファイルは読まない |
 | `throttle_seconds` | `60` | 同じ例外（アプリの行・クラス・SQLSTATE が同じ）を送り直すまでの秒数 |
 | `max_per_minute` | `20` | 部品の全体で 1 分に送る件数の上限（例外と notice を合わせて） |
-| `cache_store` | `null`（既定のキャッシュ） | 間引きの印と回数を置くキャッシュ |
+| `cache_store` | `null`（既定のキャッシュ） | 間引きの印と回数を置くキャッシュ。**`file` か `redis` にする**（下の「気をつけること」） |
 | `context` | `request_id`・`request`・`command` | Request ID・リクエスト・コマンドを読む Context のキー |
 | `notice_title` | `{app}（{env}）` | 例外ではない知らせの件名の頭。続けて「知らせ: 」と `notice()` の件名が付く |
 | `notice_throttle_seconds` | `3600` | 同じ知らせ（`notice()` のキーが同じ）を送り直すまでの秒数 |
@@ -162,14 +162,14 @@ DB・HTTP クライアントの例外の文言の組み立て方と、伏せる�
 
 - 本文を組み立てられなければ、値を含まない最小の知らせ（件名と Request ID だけ）を送る
 - 送れなければ、間引きの印を消してすぐ送り直せるようにし、部品の例外をログに書く
-- 1 分に `max_per_minute` 件（既定 20）まで。超えた分は次の知らせに「ほかの例外: 15 件（QueryException 12・TypeError 3、…）」と足す
+- 1 分に `max_per_minute` 件（既定 20）まで。超えた分は次の知らせに「ほかの例外: 03:00 から 15 件（QueryException 12・TypeError 3、…）」と足す
 - 送る環境でトークンか部屋が空なら、最初の例外でログに警告を 1 度だけ書く
 
 細かい動きは [docs/design.md](docs/design.md#失敗したときの動きゴール-1)。
 
 ## 上げるとき
 
-版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.3.0 から 0.4.0 へは、`title`・`message_max_length`・`notice_title` の上書きと、`notice()` の行を見直す。
+版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.3.0 から 0.4.0 へは、`title`・`message_max_length`・`notice_title` の上書きと、`notice()` の行と、`cache_store` を見直す。
 
 ## 気をつけること
 
@@ -177,7 +177,7 @@ DB・HTTP クライアントの例外の文言の組み立て方と、伏せる�
 - **間引きの最後の回数は届かない**: 「同じ例外: 前の知らせの後の 60 秒に、送らずに N 回」と「ほかの例外: N 件」は、次に送るときに添える。障害が止まると、最後のまとまりの回数は届かない。回数はおおよそで、file・array のキャッシュでは期限の無いキーができうる（次に送るときに消える）。時刻はアプリのタイムゾーン（`app.timezone`）で書く
 - **送るときのタイムアウト**: ad5jp/php-chatwork はタイムアウトを指定できないので、送るところだけを部品の中で書き直し、`timeout_seconds`（既定 3 秒）で切っている。送る処理を差し替えるときは `Ad5\RichPhpChatwork\Transport` を実装してコンテナに登録する
 - **PHP 8.5 で非推奨の警告**: ad5jp/php-chatwork のコンストラクタ（暗黙の nullable）が、読み込むたびに deprecation を出す
-- **DB の障害を知らせたいとき**: 既定のキャッシュが database だと、DB が落ちたときに間引きの印を置けない。そのときはプロセスの中だけで間引き（間引いた回数は出さない）、`cache_store` を `file` か `redis` にしておくとよい
+- **`cache_store` は `file` か `redis` にする**: 既定のキャッシュが database だと、DB の障害のときに間引きの印を置けない。そのときは一時フォルダ（`sys_get_temp_dir()`）のファイルに落ちて間引くが、効くのは同じサーバーの中だけ。一時フォルダも使えなければプロセスの中だけになり、間引きと全体の上限がほとんど効かない
 
 ## 開発
 

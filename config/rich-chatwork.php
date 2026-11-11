@@ -54,7 +54,8 @@ return [
     // 同じ知らせ（notice() の $throttleKey が同じ）を送り直すまでの秒数
     'notice_throttle_seconds' => 3600,
 
-    // 間引きの印と回数を置くキャッシュ。null なら既定。DB の障害を知らせたいなら file か redis にする
+    // 間引きの印と回数を置くキャッシュ。null なら既定。file か redis にする。
+    // 既定の database のままだと、DB の障害のときにキャッシュも使えず、一時フォルダの予備（同じサーバーの中だけ）に落ちる
     'cache_store' => null,
 
     // Context から読むキー。入口のミドルウェア・コマンドが文字で入れておく。
