@@ -26,8 +26,13 @@ final class Redactor
     /** URL か、空白・引用符などの直後の / で始まるパスの、? 以降 */
     private const QUERY = '/((?:\b[a-z][a-z0-9+.\-]*:\/\/|(?<=^|[\s"\'(=])\/)[^\s?#"\'<>]*)\?[^\s#"\'<>]+/iu';
 
-    /** 英数字の続き。前後がこれらの文字なら長い英数字として扱わない（クラス名・ファイル名・snake_case の一部） */
+    /** 英数字の続き。前がこれらの文字なら長い英数字として扱わない（クラス名・ファイル名・snake_case の一部） */
     private const WORD = '[A-Za-z0-9_\\\\.\-]';
+
+    /** 長い英数字の後ろの境界。. は後ろに英数字が続くときだけ続きとみなす（file.pdf は外し、文の終わりのトークン. は伏せる） */
+    private const AFTER = '(?![A-Za-z0-9_\-]|\.[A-Za-z0-9])';
+
+
 
     /**
      * @param list<string> $extraPatterns 使う側が足した規則。既定の規則の後に当てる
@@ -42,7 +47,7 @@ final class Redactor
     public function message(string $text): ?string
     {
         $text = $this->copiedQuery($text);
-        foreach ([...$this->shapes(true), $this->keyValue(false)] as [$pattern, $replacement]) {
+        foreach ([...$this->shapes(true), ...self::personal(), $this->keyValue(false)] as [$pattern, $replacement]) {
             $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         }
         $text = $text === null ? null : $this->longAlnum($text);
@@ -96,6 +101,21 @@ final class Redactor
             $query ? [self::QUERY, '$1?' . self::MARK] : null,
             ['/[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}/u', self::MARK],
         ]));
+    }
+
+    /**
+     * 規則 7b（電話番号・マイナンバー・口座番号）。メッセージと notice だけに当てる。
+     * 前後が英数字・_・- の所は外す（16 進のトークンの頭・UUID の最後の 12 桁・ファイル名の中の数字を伏せない）
+     *
+     * @return list<array{string, string}>
+     */
+    private static function personal(): array
+    {
+        return [
+            ['/(?<![A-Za-z0-9_\-])0(?:[- ]?[0-9]){9,10}(?![A-Za-z0-9_\-])/u', self::MARK],
+            ['/(?<![A-Za-z0-9_\-])[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}(?![A-Za-z0-9_\-])/u', self::MARK],
+            ['/((?:口座|account).{0,20}?)(?<![0-9])[0-9]{7}(?![0-9])/iu', '$1' . self::MARK],
+        ];
     }
 
     /**
@@ -159,10 +179,10 @@ final class Redactor
      */
     private function longAlnum(string $text): ?string
     {
-        $text = Text::replace('/(?<!' . self::WORD . ')[0-9a-fA-F]{32,}(?!' . self::WORD . ')/u', self::MARK, $text);
+        $text = Text::replace('/(?<!' . self::WORD . ')[0-9a-fA-F]{32,}' . self::AFTER . '/u', self::MARK, $text);
 
         return $text === null ? null : Text::replace(
-            '/(?<!' . self::WORD . ')[A-Za-z0-9+_\-]{32,}={0,2}(?!' . self::WORD . ')/u',
+            '/(?<!' . self::WORD . ')[A-Za-z0-9+_\-]{32,}={0,2}' . self::AFTER . '/u',
             static function (array $match): string {
                 $token = rtrim($match[0], '=');
                 $digits = preg_match_all('/\d/', $token);
