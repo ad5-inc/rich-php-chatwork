@@ -22,7 +22,10 @@
 - 例外のハンドラーは継承ではなく `reportable()` の有無で登録する（コンソールの Collision の下でも届く）。持たなければ警告を 1 度だけ書く
 - 送れなかった後の知らせは「14:30 から、送らずに 3 回（送れなかった分を含む）」と、送れなかった 1 回も含めて書く
 - 形の分からない例外の文言と notice の地の文の行は、値の書き出しの形（複数行・`=>`・serialize・print_r・var_export・JSON・`%5B`）を含むなら、伏せずに丸ごと省く
-- 伏せる規則: `passphrase`・`passcode`・リストの添字（`password[0]=`）、配列の値（print_r・var_export・JSON）、serialize の値、`\uXXXX` で書いたキー、`php_auth_pw`・`db_pass`・http_build_query の `%5D`
+- 目印が改行だけの文言は、1 行目を伏せて出し「（2 行目から先は省いた）」を添える
+- 文言の中のスキームのある URL のパスにも段の許可リストを当てる（Webhook の秘密を出さない）
+- 素の Guzzle の応答の失敗（`BadResponseException`）も、状態を件名に出す
+- 伏せる規則: クレジットカードの番号、`pw`・`passphrase`・`passcode`・リストの添字（`password[0]=`）、配列の値（print_r・var_export・JSON）、serialize の値、`\uXXXX` で書いたキー、`php_auth_pw`・`db_pass`・http_build_query の `%5D`
 - 送る直前に本文が 30,000 文字を超えていたら、件名は普通のまま本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える
 - トークンと本文を受ける引数に `#[\SensitiveParameter]`（呼び出しの並びに残さない）
 - `notice()` に枠の中身（`code`）を足した
