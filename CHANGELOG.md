@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.4.0（未リリース）
+## 0.4.0（2026-11-11）
 
 本文の形を作り直した。秘密と形の分かる個人情報を出さず、届かないことが無いようにした。形の仕様は [docs/message-format.md](docs/message-format.md)、伏せる規則は [docs/redaction.md](docs/redaction.md)。
 
