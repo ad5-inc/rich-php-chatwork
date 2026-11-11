@@ -53,9 +53,9 @@ final readonly class ProcessFailure
             return new self('外のコマンドの時間切れ（コマンドラインはログ）', '外のコマンドの時間切れ', []);
         }
 
-        // 1 秒未満は小数 2 桁（0.04 秒）。それより短く 0.00 になるなら「1 秒未満」
+        // 1 秒未満は小数 2 桁（0.04 秒）。それより短く 0.00 になるなら「0.01 秒未満」
         $shown = match (true) {
-            $seconds < 0.005 => '1 秒未満',
+            $seconds < 0.005 => '0.01 秒未満',
             $seconds < 1 => rtrim(rtrim(sprintf('%.2f', $seconds), '0'), '.') . ' 秒',
             default => rtrim(rtrim(sprintf('%.1f', $seconds), '0'), '.') . ' 秒',
         };
