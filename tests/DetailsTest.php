@@ -11,6 +11,7 @@ use Exception;
 use Google\Service\Exception as GoogleServiceException;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use PDOException;
@@ -32,7 +33,8 @@ final class DetailsTest extends TestCase
     {
         $e = $this->queryFailure('23000', 1062, "Duplicate entry 'taro@example.com' for key 'users.email'");
 
-        $this->assertSame(['SQLSTATE: 23000（ドライバーの番号 1062）', '接続: mysql'], Details::lines($e));
+        $this->assertSame(['SQLSTATE: 23000', 'ドライバーの番号: 1062', '接続: mysql'], Details::lines($e));
+        $this->assertSame('SQLSTATE 23000', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -41,7 +43,8 @@ final class DetailsTest extends TestCase
     {
         $e = $this->queryFailure('22001', 1406, "Data too long for column 'name' at row 1");
 
-        $this->assertSame(['SQLSTATE: 22001（ドライバーの番号 1406）', '接続: mysql', '列: name'], Details::lines($e));
+        $this->assertSame(['SQLSTATE: 22001', 'ドライバーの番号: 1406', '接続: mysql', '列: name'], Details::lines($e));
+        $this->assertSame('SQLSTATE 22001・列 name', Details::of($e)->summary);
     }
 
     #[Test]
@@ -49,7 +52,7 @@ final class DetailsTest extends TestCase
     {
         $e = $this->queryFailure('22001', 1406, "Data too long for column 'name' 山田' at row 1");
 
-        $this->assertSame(['SQLSTATE: 22001（ドライバーの番号 1406）', '接続: mysql'], Details::lines($e));
+        $this->assertSame(['SQLSTATE: 22001', 'ドライバーの番号: 1406', '接続: mysql'], Details::lines($e));
     }
 
     #[Test]
@@ -57,7 +60,8 @@ final class DetailsTest extends TestCase
     {
         $e = $this->connectFailure("SQLSTATE[HY000] [1045] Access denied for user 'taro@example.com'@'10.0.0.1' (using password: YES)");
 
-        $this->assertSame(['SQLSTATE: HY000（ドライバーの番号 1045）', '接続: mysql'], Details::lines($e));
+        $this->assertSame(['SQLSTATE: HY000', 'ドライバーの番号: 1045', '接続: mysql'], Details::lines($e));
+        $this->assertSame('SQLSTATE HY000・接続できない', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -75,6 +79,7 @@ final class DetailsTest extends TestCase
         $e = $this->warning('Undefined array key "taro@example.com"');
 
         $this->assertSame(['重さ: 警告'], Details::lines($e));
+        $this->assertSame('PHP の警告（E_WARNING）', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -85,10 +90,12 @@ final class DetailsTest extends TestCase
 
         $this->assertSame([
             '関数: ' . self::class . '::takesInt()',
-            '引数: #1 $id',
+            '引数の位置: #1',
+            '引数の名前: $id',
             '求める型: int',
             '渡された型: string',
         ], Details::lines($e));
+        $this->assertSame('DetailsTest::takesInt() 引数 #1 int←string', Details::of($e)->summary);
         $this->assertStringContainsString('called in', $e->getMessage());
         $this->assertStringNotContainsString(dirname(__DIR__), implode("\n", Details::lines($e)));
     }
@@ -105,7 +112,8 @@ final class DetailsTest extends TestCase
     {
         $e = new FatalError('Allowed memory size of 134217728 bytes exhausted (tried to allocate 20480 bytes)', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1]);
 
-        $this->assertSame(['メモリ切れ（上限 128 MB）'], Details::lines($e));
+        $this->assertSame(['メモリの上限: 128 MB'], Details::lines($e));
+        $this->assertSame('メモリ切れ（上限 128 MB）', Details::of($e)->summary);
         $this->assertSame([], Details::lines(new FatalError('Maximum execution time of 30 seconds exceeded', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1])));
     }
 
@@ -115,6 +123,7 @@ final class DetailsTest extends TestCase
         $e = $this->plain("Scheduled command ['/home/deploy/php' 'artisan' report:daily --mail=taro@example.com] failed with exit code [1].");
 
         $this->assertSame(['スケジュールのコマンド: report:daily', '終了コード: 1'], Details::lines($e));
+        $this->assertSame('スケジュール report:daily・終了コード 1', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -123,7 +132,8 @@ final class DetailsTest extends TestCase
     {
         $e = $this->plain("Scheduled command ['php' 'artisan' 'taro@example.com'] failed with exit code [2].");
 
-        $this->assertSame(['スケジュールのコマンドの失敗', '終了コード: 2'], Details::lines($e));
+        $this->assertSame(['終了コード: 2'], Details::lines($e));
+        $this->assertSame('スケジュールのコマンドの失敗・終了コード 2', Details::of($e)->summary);
     }
 
     #[Test]
@@ -143,6 +153,7 @@ final class DetailsTest extends TestCase
         ]);
 
         $this->assertSame(['HTTP の状態: 403', 'Google の reason: forbidden'], Details::lines($e));
+        $this->assertSame('HTTP 403・reason forbidden', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -150,12 +161,15 @@ final class DetailsTest extends TestCase
     public function Httpクライアントの失敗は_HTTPの状態を出す(): void
     {
         $this->assertSame(['HTTP の状態: 503'], Details::lines(new RequestException(new Response(new Psr7Response(503)))));
+        $this->assertSame('HTTP 503', Details::of(new RequestException(new Response(new Psr7Response(503))))->summary);
+        $this->assertSame('接続できない', Details::of(new ConnectionException('probe'))->summary);
     }
 
     #[Test]
     public function ほかの例外は何も出さない(): void
     {
         $this->assertSame([], Details::lines(new RuntimeException('taro@example.com')));
+        $this->assertNull(Details::of(new RuntimeException('taro@example.com'))->summary);
     }
 
     /**

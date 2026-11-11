@@ -1,0 +1,163 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ad5\RichPhpChatwork\Tests;
+
+use Ad5\RichPhpChatwork\Redactor;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\TestCase as PlainTestCase;
+
+/**
+ * 伏せる規則。規則ごとに、伏せる例と伏せない例を並べる
+ */
+final class RedactorTest extends PlainTestCase
+{
+    private const HEX32 = '0123456789abcdef0123456789abcdef';
+
+    private const HEX40 = '0123456789abcdef0123456789abcdef01234567';
+
+    /** 英字と数字が混ざった作り物のトークン（数字は 3 個以上） */
+    private const TOKEN = 'ProbeTokenAbcDef123GhiJklMnoPqrStu';
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function redacted(): iterable
+    {
+        yield 'JSON の password' => ['{"password":"p@ss word"}', '{"password":（伏せた）}'];
+        yield '引用符を逃がした値' => ['{"token":"a\"b"}', '{"token":（伏せた）}'];
+        yield 'PHP の配列' => ["'password' => 'x'", "'password' => （伏せた）"];
+        yield 'PHP の代入' => ["\$secret = 'x'", '$secret = （伏せた）'];
+        yield '閉じる引用符が無い' => ['{"access_token":"abc def (truncated...)', '{"access_token":（伏せた）'];
+        yield '続きのあるキー' => ['{"password":"x","password_confirmation":"y"}', '{"password":（伏せた）,"password_confirmation":（伏せた）}'];
+        yield '大文字のキー' => ['XSRF-TOKEN=abc123; path=/', 'XSRF-TOKEN=（伏せた）; path=/'];
+        yield '引用符の無い値' => ['remember_token: probe-value, next', 'remember_token: （伏せた）, next'];
+        yield 'JWT' => ['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcm9iZSJ9.c2lnbmF0dXJl here', 'jwt （伏せた） here'];
+        yield 'bcrypt' => ['hash $2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234 end', 'hash （伏せた） end'];
+        yield 'argon2id' => ['hash $argon2id$v=19$m=65536,t=4,p=1$c2FsdA$aGFzaA end', 'hash （伏せた） end'];
+        yield 'Bearer' => ['header Bearer abc.def-ghi end', 'header Bearer （伏せた） end'];
+        yield 'メールアドレス' => ['to probe.user@example.test failed', 'to （伏せた） failed'];
+        yield 'URL の利用者情報と ? 以降' => ['GET https://user:pass@host.example/x?token=y failed', 'GET https://（伏せた）@host.example/x?（伏せた） failed'];
+        yield '16 進 32 文字' => ['key ' . self::HEX32 . ' end', 'key （伏せた） end'];
+        yield 'base64 のトークン' => ['key ' . self::TOKEN . '== end', 'key （伏せた） end'];
+        yield 'session と 16 進 40 文字' => ['file session_' . self::HEX40 . ' end', 'file （伏せた） end'];
+    }
+
+    #[Test]
+    #[DataProvider('redacted')]
+    public function 伏せる(string $text, string $expected): void
+    {
+        $this->assertSame($expected, $this->redactor()->message($text));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function kept(): iterable
+    {
+        yield 'CSRF の文言' => ['CSRF token mismatch.'];
+        yield '検証の文言' => ['The token field is required.'];
+        yield '長い snake_case' => ['employee_evaluation_item_score_2024_version_history_id'];
+        yield '長いクラス名' => ['App\UseCase\Actions\Employee\Evaluation\VeryLongActionNameForProbe2024Handler'];
+        yield 'UUID' => ['id 123e4567-e89b-12d3-a456-426614174000 end'];
+        yield 'パスの区切り' => ['storage/app/' . self::HEX32 . '.pdf'];
+        yield 'URL のパス' => ['https://host.example/x'];
+        yield '列とキーの名前' => ["for column 'name' and for key 'employees.code'"];
+    }
+
+    #[Test]
+    #[DataProvider('kept')]
+    public function 伏せない(string $text): void
+    {
+        $this->assertSame($text, $this->redactor()->message($text));
+    }
+
+    #[Test]
+    public function 写されたDBの文言は_entryの値だけを伏せる(): void
+    {
+        $this->assertSame(
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '（伏せた）' for key 'employees.code' (Connection: mysql, SQL: （ログ）)",
+            $this->redactor()->message("SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '試験太郎-2026' for key 'employees.code' (Connection: mysql, SQL: insert into employees (code) values ('試験太郎-2026'))"),
+        );
+        $this->assertSame(
+            "Duplicate entry '（伏せた）' for key 'employees.code'",
+            $this->redactor()->message("Duplicate entry 'O'Probe-2026' for key 'employees.code'"),
+        );
+    }
+
+    #[Test]
+    public function 写されたDBの文言は_nearの後ろと値を伏せ_列の名前は残す(): void
+    {
+        $this->assertSame(
+            "You have an error in your SQL syntax; check the manual for the right syntax to use near '（伏せた）' at line 1",
+            $this->redactor()->message("You have an error in your SQL syntax; check the manual for the right syntax to use near '= 'secret123'' at line 1"),
+        );
+        $this->assertSame(
+            "Incorrect integer value: '（伏せた）' for column 'age' at row 1",
+            $this->redactor()->message("Incorrect integer value: 'probe-value' for column 'age' at row 1"),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function copiedQueryMessages(): iterable
+    {
+        $head = "SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause'";
+        $details = 'Connection: mysql, Host: db.internal, Port: 3306, Database: probe_db';
+
+        yield '値に ( だけ' => ["{$head} ({$details}, SQL: select * from t where a = 'x(' and b = 1)", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield '値に ) だけ' => ["{$head} ({$details}, SQL: select * from t where a = 'x)' and b = 1)", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield 'View の 2 段' => [
+            "{$head} ({$details}, SQL: select * from t where a = 'x') (View: resources/views/a.blade.php) (View: resources/views/a.blade.php)",
+            "{$head} (Connection: mysql, SQL: （ログ）) (View: resources/views/a.blade.php) (View: resources/views/a.blade.php)",
+        ];
+        yield '末尾が切れて SQL の途中まで' => ["{$head} ({$details}, SQL: select * from t where a = 'x", "{$head} (Connection: mysql, SQL: （ログ）)"];
+        yield '末尾が切れて Connection も無い' => ["SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'zz' for ke", 'SQLSTATE[23000] （伏せた）'];
+    }
+
+    #[Test]
+    #[DataProvider('copiedQueryMessages')]
+    public function 包む例外の一覧に無い例外が写したDBの文言も伏せ_SQLSTATEは残す(string $message, string $expected): void
+    {
+        $this->assertSame('Wrapped: ' . $expected, $this->redactor()->message('Wrapped: ' . $message), 'RuntimeException などが写した形');
+    }
+
+    #[Test]
+    public function 使う側の規則を足せ_失敗したらnullを返す(): void
+    {
+        $this->assertSame('社員 （伏せた） の更新', new Redactor(['/P-\d{4}/'])->message('社員 P-1234 の更新'));
+        $this->assertNull(new Redactor(['/(/'])->message('社員 P-1234 の更新'));
+    }
+
+    #[Test]
+    public function 前後のコードは形のはっきりした物と_文字列の値だけを伏せる(): void
+    {
+        $redactor = $this->redactor();
+
+        $this->assertSame('$secret = （伏せた）;', $redactor->snippet("\$secret = 'sk_test_probe';"));
+        $this->assertSame("'password' => （伏せた）,", $redactor->snippet("'password' => 'probe-pass',"));
+        $this->assertSame('$key = （伏せた）;', $redactor->snippet('$key = sk_live_ProbeValue123;'));
+        $this->assertSame('$aws = （伏せた）;', $redactor->snippet('$aws = AKIAPROBEPROBEPROBE1;'));
+        $this->assertSame('$g = （伏せた）;', $redactor->snippet('$g = AIzaProbeProbeProbeProbeProbeProbe12345;'));
+        $this->assertSame('$s = （伏せた）;', $redactor->snippet('$s = xoxb-1234-probe;'));
+        $this->assertSame('$h = （伏せた）;', $redactor->snippet('$h = ghp_ProbeProbeProbeProbe1234;'));
+        $this->assertSame('（伏せた）', $redactor->snippet('-----BEGIN RSA PRIVATE KEY-----'));
+        $this->assertSame('$password = $request->password;', $redactor->snippet('$password = $request->password;'));
+        $this->assertSame('$id = \'' . self::HEX32 . '\';', $redactor->snippet('$id = \'' . self::HEX32 . '\';'), '長い英数字は当てない');
+    }
+
+    #[Test]
+    public function リクエストはURLの問い合わせだけを伏せる(): void
+    {
+        $this->assertSame('GET /api/x?（伏せた）', $this->redactor()->request('GET /api/x?token=y&page=2'));
+        $this->assertSame('GET /api/users/probe@example.test', $this->redactor()->request('GET /api/users/probe@example.test'));
+    }
+
+    private function redactor(): Redactor
+    {
+        return new Redactor([]);
+    }
+}
