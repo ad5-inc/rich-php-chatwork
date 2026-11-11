@@ -595,8 +595,87 @@ final class ReporterTest extends TestCase
         $this->reporter()->report($this->distinct(2));
 
         $body = $this->transport->sent[1]['body'];
-        $this->assertStringContainsString("同じ例外: 前の知らせの後の 60 秒に、送らずに 1 回\n", $body);
+        $this->assertStringContainsString("同じ例外: 上限で送らなかった 1 回（11/10 23:59 から）\n", $body, '前の知らせが無いので、間引きの言い方を書かない');
         $this->assertStringContainsString('ほかの例外: 11/10 23:59 から 1 件（LogicException 1、', $body);
+    }
+
+    #[Test]
+    public function 間引いた回数と上限で送らなかった回数は_分けて書く(): void
+    {
+        config(['rich-chatwork.max_per_minute' => 2]);
+        $e = $this->distinct(1);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 14:02:00'));
+        $this->reporter()->report($e);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 14:02:10'));
+        $this->reporter()->report($e);
+        $this->reporter()->report($e);
+        $this->reporter()->report($this->distinct(2));
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 14:05:00'));
+        $this->reporter()->report($this->distinct(3));
+        $this->reporter()->report($this->distinct(4));
+        $this->reporter()->report($e);
+        $this->reporter()->report($e);
+        $this->reporter()->report($e);
+
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 14:06:00'));
+        $this->reporter()->report($e);
+
+        $this->assertStringContainsString("同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 2 回。上限で送らなかった 3 回（14:05 から）\n", $this->transport->sent[array_key_last($this->transport->sent)]['body']);
+    }
+
+    #[Test]
+    public function 値を持てないキャッシュでも_予備の置き場で間引いて届け_1度だけログに書く(): void
+    {
+        config(['cache.stores.null' => ['driver' => 'null'], 'rich-chatwork.cache_store' => 'null']);
+        $this->clearFallback();
+        $logged = $this->listenLog();
+        $e = new RuntimeException('probe');
+
+        $this->reporter()->report($e);
+        $this->reporter()->report($e);
+        $this->reporter()->report(new LogicException('probe'));
+
+        $this->assertCount(2, $this->transport->sent);
+        $this->assertSame(1, count(array_filter($logged->messages, static fn (string $m): bool => str_starts_with($m, '間引きのキャッシュが使えない'))));
+    }
+
+    #[Test]
+    public function 予備の一時フォルダは_自分の物で書き込めるときだけ_権限を絞って使う(): void
+    {
+        $this->breakCache();
+        $directory = Throttle::fallbackDirectory(dirname(__DIR__));
+
+        $this->reporter()->report(new RuntimeException('probe'));
+
+        $files = array_filter(new \Illuminate\Filesystem\Filesystem()->allFiles($directory), static fn (\SplFileInfo $file): bool => $file->isFile());
+        $this->assertNotSame([], $files);
+        foreach ($files as $file) {
+            $this->assertSame('600', substr(sprintf('%o', $file->getPerms()), -3), 'キャッシュのファイルは持ち主だけ');
+        }
+
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
+            mkdir($directory, 0777);
+            chown($directory, 12345);
+            $this->app?->forgetInstance(Reporter::class);
+            $logged = $this->listenLog();
+            $this->reporter()->report(new LogicException('probe'));
+            $this->reporter()->report(new \DomainException('probe'));
+            $this->assertSame([], array_values(array_diff(scandir($directory) ?: [], ['.', '..'])), '持ち主の違うフォルダには書かない');
+            $this->assertSame(1, count(array_filter($logged->messages, static fn (string $m): bool => str_starts_with($m, '予備の一時フォルダが使えない'))));
+            rmdir($directory);
+        }
+    }
+
+    #[Test]
+    public function 長さで替えた知らせは_件名の要約を残し_組み立ての失敗と言い分ける(): void
+    {
+        $oversized = new \ReflectionMethod(Reporter::class, 'oversized');
+        $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
+        $pdo->errorInfo = ['23000', 1062, 'x'];
+
+        $this->assertSame('[info][title]Probe（production）QueryException: SQLSTATE 23000（長すぎて省いた。ログを見る）[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]', $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
+        $this->assertSame('[info][title]Probe（production）知らせ: 多い（長すぎて省いた。ログを見る）[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]', $oversized->invoke($this->reporter(), null, [], '多い'));
     }
 
     #[Test]
@@ -663,6 +742,7 @@ final class ReporterTest extends TestCase
 
         $this->assertLessThanOrEqual(30000, mb_strlen($body));
         $this->assertMatchesRegularExpression('/\[code\]x+…\[\/code\]/', $body);
+        $this->assertStringContainsString('前後のコード: 長いので省いた（ログを見る）', $body);
     }
 
     #[Test]
@@ -811,6 +891,11 @@ final class ReporterTest extends TestCase
         config(['cache.stores.broken' => ['driver' => 'broken'], 'rich-chatwork.cache_store' => 'broken']);
         $this->app?->forgetInstance(Reporter::class);
         // 予備の一時フォルダは前のテストの印を持ち越さない
+        $this->clearFallback();
+    }
+
+    private function clearFallback(): void
+    {
         $directory = Throttle::fallbackDirectory(dirname(__DIR__));
         if (is_dir($directory)) {
             new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);

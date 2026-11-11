@@ -64,6 +64,17 @@ final class RedactorTest extends PlainTestCase
         yield '全角のコロン' => ['パスワード：probe value', 'パスワード:（伏せた）'];
         yield '日本語のキー' => ['暗証番号: 9876, トークン=probe-value', '暗証番号: （伏せた）, トークン=（伏せた）'];
         yield '引用符の無い値は空白で止めない' => ['password=probe value here, next', 'password=（伏せた）, next'];
+        yield 'print_r の形' => ["Array\n(\n    [password] => hunter2\n    [api_token] => abc123\n)", "Array\n(\n    [password] => （伏せた）\n    [api_token] => （伏せた）\n)"];
+        yield '角括弧のキー' => ['user[password]=hunter2&user[name]=a', 'user[password]=（伏せた）&user[name]=a'];
+        yield 'エスケープした JSON' => ['{"data":"{\\"password\\":\\"hunter2\\"}"}', '{"data":"{\\"password\\":（伏せた）}"}'];
+        yield '日本語のキーと「は」' => ['パスワードは hunter2 です', 'パスワードは （伏せた） です'];
+        yield '日本語のキーと「」' => ['確認コード「123456」を入れる', '確認コード「（伏せた）」を入れる'];
+        yield 'ワンタイムのキー' => ['otp=123456, verification_code: 654321', 'otp=（伏せた）, verification_code: （伏せた）'];
+        yield '全角の区切りでも値が途切れない' => ['password=hun，ter2 rest', 'password=（伏せた）'];
+        yield '半角カナも揃える' => ['ﾊﾟｽﾜｰﾄﾞ: probe', 'パスワード: （伏せた）'];
+        yield '+81 の後ろの (0)' => ['tel +81 (0)90-1234-5678 end', 'tel （伏せた） end'];
+        yield '– と / で区切った電話番号' => ['tel 03–1234/5678 end', 'tel （伏せた） end'];
+        yield '. で区切ったマイナンバー' => ['番号 1234.5678.9012 を', '番号 （伏せた） を'];
         yield '文言の中の鍵の形' => ['key AK' . 'IA' . str_repeat('PROBE', 3) . '1 rejected', 'key （伏せた） rejected'];
     }
 
@@ -152,8 +163,16 @@ final class RedactorTest extends PlainTestCase
         ];
         yield '値に Connection と SQL を含む' => [
             "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: x' for key 'k' ({$details}, SQL: insert into t values ('v (Connection: a, SQL: x'))",
-            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: （ログ）)",
+            'SQLSTATE[23000] （伏せた） (Connection: a, SQL: （ログ）)',
         ];
+        yield '写された 1044' => ["SQLSTATE[HY000] [1044] Access denied for user 'probe-user'@'%' to database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1044] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 1049' => ["SQLSTATE[HY000] [1049] Unknown database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1049] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 1130' => ["SQLSTATE[HY000] [1130] Host '10.0.0.1' is not allowed to connect ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1130] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 2003' => ["SQLSTATE[HY000] [2003] Can't connect to MySQL server on 'db.internal' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [2003] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield '写された 2005' => ["SQLSTATE[HY000] [2005] Unknown MySQL server host 'db.internal' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [2005] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'pgsql の Key' => ["SQLSTATE[23505]: Unique violation: 7 ERROR:  duplicate key value violates unique constraint \"users_api_token_unique\" DETAIL:  Key (api_token)=(probe-secret) already exists. ({$details}, SQL: insert into users)", 'SQLSTATE[23505] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'pgsql の Failing row' => ["SQLSTATE[23502]: Not null violation: 7 ERROR:  null value in column \"name\" DETAIL:  Failing row contains (1, probe-value). ({$details}, SQL: insert into users)", 'SQLSTATE[23502] （伏せた） (Connection: mysql, SQL: （ログ）)'];
+        yield 'パスの形でないビューは残さない' => ["{$head} ({$details}, SQL: select 1) (View: probe-secret)", "{$head} (Connection: mysql, SQL: （ログ）)"];
     }
 
     #[Test]

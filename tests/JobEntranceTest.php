@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Ad5\RichPhpChatwork\Tests;
 
+use Ad5\RichPhpChatwork\JobEntrance;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Tests\Jobs\FailingJob;
 use Ad5\RichPhpChatwork\Tests\Jobs\OuterJob;
+use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Exceptions\Handler;
@@ -108,9 +110,76 @@ final class JobEntranceTest extends TestCase
 
         $body = $this->onlyBody();
         $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $body);
-        $this->assertStringContainsString("発端の Request ID: req-http\n", $body);
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . "（ジョブの中のログ）\n", $body);
+        $this->assertStringContainsString("発端の Request ID: req-http（例外の記録はこの番号）\n", $body);
         $this->assertDoesNotMatchRegularExpression('/^リクエスト: /m', $body);
         $this->assertSame('req-http', Context::get('request_id'));
+    }
+
+    #[Test]
+    public function syncで失敗して呼び出し側で記録されたら_記録の番号を知らせに書く(): void
+    {
+        Context::add('request_id', 'req-caller');
+        $logged = $this->requestIdWhenReported();
+
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException $e) {
+            report($e);
+        }
+
+        $body = $this->onlyBody();
+        $this->assertSame(['req-caller'], $logged->ids);
+        $this->assertStringContainsString("発端の Request ID: req-caller（例外の記録はこの番号）\n", $body);
+    }
+
+    #[Test]
+    public function 出した側にIDが無いsyncで失敗したら_ジョブのIDを残し_記録と知らせの番号が揃う(): void
+    {
+        $logged = $this->requestIdWhenReported();
+
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException $e) {
+            report($e);
+        }
+
+        $body = $this->onlyBody();
+        $this->assertSame([FailingJob::$seenRequestId], $logged->ids);
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . "（中身はログをこの番号で引く）\n", $body);
+        $this->assertStringNotContainsString('発端の Request ID', $body);
+        $this->assertSame(FailingJob::$seenRequestId, Context::get('request_id'), '呼び出し側の残りのログもジョブの番号で引ける');
+    }
+
+    #[Test]
+    public function 最小の知らせも_普通の知らせと同じRequestIDを出す(): void
+    {
+        Context::add('request_id', 'req-caller');
+
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException $e) {
+            $this->reporterWithBrokenConfig('rich-chatwork.message_max_length')->report($e);
+        }
+
+        $body = $this->onlyBody();
+        $this->assertStringContainsString('知らせを組み立てられなかった[/title]Request ID: ' . FailingJob::$seenRequestId . "（ジョブの中のログ）\n発端の Request ID: req-caller（例外の記録はこの番号）[/info]", $body);
+    }
+
+    #[Test]
+    public function 印の付いた段は_Contextが入れ替わっていなければ戻してから捨てる(): void
+    {
+        $entrance = $this->app?->make(JobEntrance::class);
+        $this->assertInstanceOf(JobEntrance::class, $entrance);
+        Context::add('request_id', 'req-a');
+        $first = new FakeJob('App\Jobs\FirstJob');
+        $entrance->processing($first);
+        $entrance->failed($first, new RuntimeException('probe'));
+
+        $second = new FakeJob('App\Jobs\SecondJob');
+        $entrance->processing($second);
+
+        $this->assertSame('req-a', $entrance->of(new RuntimeException('probe'), new RuntimeException('probe'))['origin'] ?? null, '前のジョブの ID を発端にしない');
     }
 
     #[Test]
@@ -126,10 +195,41 @@ final class JobEntranceTest extends TestCase
 
         $body = $this->onlyBody();
         $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $body);
-        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . '（', $body);
-        $this->assertStringContainsString('発端の Request ID: ' . OuterJob::$seenRequestId . "\n", $body);
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . '（ジョブの中のログ）', $body);
+        $this->assertStringContainsString("発端の Request ID: req-top（例外の記録はこの番号）\n", $body);
         $this->assertNotSame(OuterJob::$seenRequestId, FailingJob::$seenRequestId);
         $this->assertSame('req-top', Context::get('request_id'), '外側のジョブの分も戻り、2 回戻らない');
+    }
+
+    /**
+     * 設定の 1 つのキーを読むと投げる Reporter（組み立ての失敗を起こす）。入口は本物の JobEntrance を使う
+     */
+    private function reporterWithBrokenConfig(string $brokenKey): Reporter
+    {
+        $config = new class (config()->all(), $brokenKey) extends ConfigRepository {
+            /**
+             * @param array<string, mixed> $items
+             */
+            public function __construct(array $items, private readonly string $broken)
+            {
+                parent::__construct($items);
+            }
+
+            /**
+             * @param array<mixed>|string $key
+             */
+            public function get($key, $default = null): mixed
+            {
+                if ($key === $this->broken) {
+                    throw new \LogicException('config is broken');
+                }
+
+                return parent::get($key, $default);
+            }
+        };
+        $app = $this->app ?? $this->fail('アプリが無い');
+
+        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
     }
 
     private function runOnWorker(WorkerJob $job): void
