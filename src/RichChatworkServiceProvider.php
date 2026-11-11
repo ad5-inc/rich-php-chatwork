@@ -7,6 +7,7 @@ namespace Ad5\RichPhpChatwork;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Log\Context\Events\ContextHydrated;
 use Illuminate\Queue\Events\JobAttempted;
@@ -200,7 +201,14 @@ final class RichChatworkServiceProvider extends ServiceProvider
             $safely(static fn () => $entrance()->settle());
         });
         // 入口の終わり。出した側に ID が無い sync の失敗で残したジョブの ID を戻す
-        $events->listen([CommandFinished::class, RequestHandled::class], static function () use ($entrance, $safely): void {
+        // 要求の中の Artisan::call でも CommandFinished が出るので、深さを数えて一番外でだけ戻す
+        $events->listen(CommandStarting::class, static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->commandStarting());
+        });
+        $events->listen(CommandFinished::class, static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->commandFinished());
+        });
+        $events->listen(RequestHandled::class, static function () use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->ending());
         });
         $this->app->terminating(static function () use ($entrance, $safely): void {

@@ -24,6 +24,8 @@ use WeakMap;
  * - sync で失敗: SyncQueue は例外を呼び出し側へ投げ、report() は呼び出し側（HTTP など）で呼ばれる。
  *   呼び出し側へ戻る所の JobAttempted（executeJob の finally）で戻す。知らせは失敗のイベントで結び付けた入口で出す
  *
+ * 出した側に ID が無い sync の失敗では戻さずに残し（呼び出し側の例外の記録もジョブの ID になる）、入口の終わり（ending）で戻す。
+ *
  * 失敗のイベント（JobExceptionOccurred・JobFailed）で入口を例外に結び付けて取っておく（sync では report() の時点で戻っているため）。
  *
  * Laravel の ContextServiceProvider は JobProcessing で Context を丸ごと入れ替える（hydrate）。
@@ -36,6 +38,9 @@ final class JobEntrance
 
     /** @var WeakMap<Throwable, array{label: string, id: string, origin: ?string, sync: bool}> */
     private WeakMap $captured;
+
+    /** 動いているコマンドの深さ。要求の中の Artisan::call の終わりで、残した ID を戻さないため */
+    private int $commands = 0;
 
     /** 前の JobProcessing の後に Laravel が Context を入れ替えた（ContextHydrated） */
     private bool $hydrated = false;
@@ -147,8 +152,24 @@ final class JobEntrance
         $this->finished($job);
     }
 
+    public function commandStarting(): void
+    {
+        $this->commands++;
+    }
+
     /**
-     * 入口の終わり（CommandFinished・RequestHandled・アプリの terminating）。残したジョブの ID を戻す。
+     * 一番外のコマンドの終わりでだけ、残した ID を戻す
+     */
+    public function commandFinished(): void
+    {
+        $this->commands = max(0, $this->commands - 1);
+        if ($this->commands === 0) {
+            $this->ending();
+        }
+    }
+
+    /**
+     * 入口の終わり（一番外の CommandFinished・RequestHandled・アプリの terminating）。残したジョブの ID を戻す。
      * Context がもう別の値なら（後のジョブが入れ替えた）触らない
      */
     public function ending(): void
@@ -205,12 +226,22 @@ final class JobEntrance
      */
     public function of(Throwable $e, Throwable $main): ?array
     {
-        $entry = $this->captured[$e] ?? $this->captured[$main] ?? null;
+        // 呼び出し側が sync の失敗を別の例外で包み直したときも、previous を辿って結び付けた入口を使う
+        $seen = 0;
+        for ($current = $e; $current !== null && $seen <= Chain::DEPTH; $current = $current->getPrevious(), $seen++) {
+            $entry = $this->captured[$current] ?? null;
+            if ($entry !== null) {
+                return $entry;
+            }
+        }
+        $entry = $this->captured[$main] ?? null;
         if ($entry !== null) {
             return $entry;
         }
 
-        $top = end($this->stack);
+        // 動いている最中の段だけ。失敗して残した段（戻すのを待っている物）は、もう入口ではない（受け止めた後の別の例外はコマンド・HTTP で出す）
+        $running = array_filter($this->stack, static fn (array $frame): bool => ! $frame['failed']);
+        $top = end($running);
 
         // 動いている最中のジョブの中で report() したなら、呼び出し側で記録されたのではない
         return $top === false ? null : ['label' => $top['label'], 'id' => $top['id'], 'origin' => $top['origin'], 'sync' => false];
