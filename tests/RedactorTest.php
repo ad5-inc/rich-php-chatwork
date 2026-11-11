@@ -75,6 +75,19 @@ final class RedactorTest extends PlainTestCase
         yield '+81 の後ろの (0)' => ['tel +81 (0)90-1234-5678 end', 'tel （伏せた） end'];
         yield '– と / で区切った電話番号' => ['tel 03–1234/5678 end', 'tel （伏せた） end'];
         yield '. で区切ったマイナンバー' => ['番号 1234.5678.9012 を', '番号 （伏せた） を'];
+        yield 'Guzzle の ConnectException の Slack' => [
+            "cURL error 7: Failed to connect to hooks.slack.example port 443 after 3 ms: Couldn't connect to server (see https://curl.haxx.se/libcurl/c/libcurl-errors.html) for https://hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12",
+            "cURL error 7: Failed to connect to hooks.slack.example port 443 after 3 ms: Couldn't connect to server (see https://curl.haxx.se/libcurl/c/{…}) for https://hooks.slack.example/services/{…}/{…}/{…}",
+        ];
+        yield 'file_get_contents の Discord' => [
+            'file_get_contents(https://discord.com/api/webhooks/123456789012345678/Probe-Secret_Probe-Secret): Failed to open stream: HTTP request failed!',
+            'file_get_contents(https://discord.com/api/webhooks/{…}/{…}): Failed to open stream: HTTP request failed!',
+        ];
+        yield 'Telegram の URL' => ['request to https://api.telegram.org/bot123456:PROBE-probe/sendMessage failed', 'request to https://api.telegram.org/{…}/{…} failed'];
+        yield 'クレジットカード（区切りなし）' => ['card 4111111111111111 end', 'card （伏せた） end'];
+        yield 'クレジットカード（-）' => ['card 4111-1111-1111-1111 end', 'card （伏せた） end'];
+        yield 'クレジットカード（空白）' => ['card 4111 1111 1111 1111 end', 'card （伏せた） end'];
+        yield 'pw のキー' => ['pw=hunter2, next', 'pw=（伏せた）, next'];
         yield 'passphrase と passcode' => ['passphrase=probe-1, passcode: 1234', 'passphrase=（伏せた）, passcode: （伏せた）'];
         yield 'リストの添字' => ['password[0]=probe-2&token[]=probe-3&tokens%5B0%5D=probe-4&name=a', 'password[0]=（伏せた）&token[]=（伏せた）&tokens%5B0%5D=（伏せた）&name=a'];
         yield '文言の中の鍵の形' => ['key AK' . 'IA' . str_repeat('PROBE', 3) . '1 rejected', 'key （伏せた） rejected'];
@@ -101,6 +114,7 @@ final class RedactorTest extends PlainTestCase
         yield 'SQLSTATE・HTTP の状態・行番号' => ['state 22001 HTTP 503 at line 1234 at row 1'];
         yield '7 桁でない口座の後ろ' => ['口座の数 12 件'];
         yield '0 埋めの社員コード' => ['社員 0012345678 の更新'];
+        yield 'pw で始まる語' => ['pwned=3'];
         yield 'URL のパス' => ['https://host.example/x'];
         yield '列とキーの名前' => ["for column 'name' and for key 'employees.code'"];
     }

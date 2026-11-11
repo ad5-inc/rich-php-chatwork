@@ -133,6 +133,11 @@ final class ReporterTest extends TestCase
         yield '複数行' => ["first line\npin probe-pw-14", ['probe-pw-14']];
         yield 'serialize の配列' => ['probe a:1:{i:0;s:11:"probe-pw-15";}', ['probe-pw-15']];
         yield '全角で書いた JSON' => ['payload ｛＂pin＂:＂probe-pw-16＂｝', ['probe-pw-16']];
+        yield 'URL エンコードした JSON' => ['body=%7B%22pin%22%3A%22probe-pw-18%22%7D', ['probe-pw-18']];
+        yield '1 行目が Array' => ["Array\n(\n    [pin] => probe-pw-19\n)", ['probe-pw-19']];
+        yield '1 行目が {' => ["{\n    \"pin\": \"probe-pw-20\"\n}", ['probe-pw-20']];
+        yield '1 行目が array (' => ["array (\n  'pin' => 'probe-pw-21',\n)", ['probe-pw-21']];
+        yield '1 行目の終わりが {' => ["payload {\n  \"pin\": \"probe-pw-22\"\n}", ['probe-pw-22']];
     }
 
     /**
@@ -173,6 +178,39 @@ final class ReporterTest extends TestCase
         $body = $this->reporter()->body($this->failWithMessage($message));
 
         $this->assertStringContainsString('[/title][code]' . $message . '[/code]', $body);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function multiLine(): iterable
+    {
+        yield 'Carbon の書式の失敗' => ["Unexpected data found.\nTrailing data", 'Unexpected data found.'];
+        yield 'Symfony Console の名前の誤り' => ["Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily", 'Command "report:dail" is not defined.'];
+        yield 'SMTP の 2 行の応答' => ["Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\r\n550 5.1.1 Please check probe-user@example.test\"", 'Expected response code "250" but got code "550", with message "550-5.1.1 The account does not exist.'];
+    }
+
+    #[Test]
+    #[DataProvider('multiLine')]
+    public function 目印が改行だけなら_1行目を伏せて出し_2行目から先を省く(string $message, string $first): void
+    {
+        config(['rich-chatwork.send_message' => true]);
+
+        $body = $this->reporter()->body($this->failWithMessage($message));
+
+        $this->assertStringContainsString('[/title][code]' . $first . '（2 行目から先は省いた）[/code]', $body);
+        $this->assertStringNotContainsString('probe-user', $body);
+    }
+
+    #[Test]
+    public function Guzzleの応答の失敗は_状態を件名に出す(): void
+    {
+        $e = \GuzzleHttp\Exception\RequestException::create(new \GuzzleHttp\Psr7\Request('GET', 'https://api.example.test/x'), new \GuzzleHttp\Psr7\Response(429));
+
+        $body = $this->reporter()->body($e);
+
+        $this->assertStringStartsWith('[info][title]Probe（production）ClientException: HTTP 429[/title]', $body);
+        $this->assertSame('HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
     }
 
     #[Test]

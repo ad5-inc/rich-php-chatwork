@@ -248,6 +248,39 @@ final class JobEntranceTest extends TestCase
     }
 
     #[Test]
+    public function HTTPの中のArtisan_callの終わりでは_残したIDを戻さない(): void
+    {
+        $this->runningOverHttp();
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException) {
+            // 受け止めて続ける
+        }
+        $input = new \Symfony\Component\Console\Input\ArrayInput([]);
+        $output = new \Symfony\Component\Console\Output\NullOutput();
+        Event::dispatch(new \Illuminate\Console\Events\CommandStarting('inner', $input, $output));
+        Event::dispatch(new \Illuminate\Console\Events\CommandFinished('inner', $input, $output, 0));
+
+        $this->assertSame(FailingJob::$seenRequestId, Context::get('request_id'), 'HTTP では RequestHandled と terminating に任せる');
+    }
+
+    #[Test]
+    public function ワーカーのジョブのfailedの中で記録した別の例外は_ジョブの入口で出す(): void
+    {
+        Event::listen(\Illuminate\Queue\Events\JobFailed::class, static function (): void {
+            report(new \LogicException('in failed'));
+        });
+        $job = $this->workerJob(new FailingJob());
+
+        $this->runOnWorker($job);
+
+        $bodies = array_column($this->transport->sent, 'body');
+        $logic = array_values(array_filter($bodies, static fn (string $b): bool => str_contains($b, 'LogicException')));
+        $this->assertCount(1, $logic);
+        $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $logic[0]);
+    }
+
+    #[Test]
     public function 最小の知らせも_普通の知らせと同じRequestIDを出す(): void
     {
         Context::add('request_id', 'req-caller');
