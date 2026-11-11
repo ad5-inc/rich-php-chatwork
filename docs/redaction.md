@@ -22,7 +22,8 @@
 | `{"`・`["`・`\"` | JSON とエスケープした JSON |
 | `%5B`・`%5D` | http_build_query の角括弧 |
 | `%7B%22`・`%5B%22`・`%22%3A` | URL エンコードした JSON |
-| `The command "`・`The process "`（文言のどこに含んでも） | 写したプロセスの文言（コマンドラインに `-p` の後ろのパスワードなどが入る） |
+
+写したプロセスの文言（`The command "…" failed.`・`The process "…" exceeded the timeout`・`… exceeded the idle timeout`。Laravel・Symfony の Process の失敗・時間切れ・起動の失敗の形。大文字小文字を区別しない）を文言のどこかに含むなら、別の理由で丸ごと「（コマンドラインを含むので省いた。ログを見る）」にする。コマンドラインに `-p` の後ろのパスワードなどが入るため。`The command "report:dailyy" does not exist.` のような artisan の文言は、この形に当たらないので省かない。
 
 当たった目印が改行だけで、1 行目が書き出しの頭（`{`・`[`・`(` で始まる・終わる、`Array`・`array`・`Object` で終わる）でもなければ、1 行目だけを下の規則で伏せて出し、「（2 行目から先は省いた）」を添える（Carbon の書式の失敗・Symfony Console の名前の誤り・SMTP の 2 行の応答のように、1 行目で読める文言のため）。notice の行は行ごとの判定なので、この扱いは無い。
 
@@ -55,7 +56,7 @@
 | 7 | メールアドレス（`@` の代わりの `%40` も） | `to （伏せた） failed` | リクエストの中（規則 6 だけ） |
 | 7b | 電話番号（`0[1-9]` か `+81` で始まる 10〜11 桁）・クレジットカード（4 桁×4・Amex の 4-6-5・Diners の 4-6-4。12 桁の規則より先）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`０３－１２３４－５６７８`・`+81 90-1234-5678`・`(03)1234-5678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・`0012345678` のような 0 埋めの番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
 | 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`[password] => （伏せた）`（print_r）・`user[password]=（伏せた）`・`{\"password\":（伏せた）}`（エスケープした JSON）・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）`・`パスワードは （伏せた） です`・`確認コード「（伏せた）」` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
-| 8b | URL のパス。スキームのある URL・`\/` でエスケープした URL・ホストの形で始まる URL（`hooks.slack.com/…`）のパスを、段ごとの許可リスト（英小文字の段と `v1` のような段だけ残し、ほかは `{…}`。組み立て直す HTTP の文言と同じ `UrlPath`）に通す。キーと値の後に当てる（先に `{…}` にすると、引用符の無い値が `}` で止まる）。パスは ASCII の文字だけで、`` ` `` と `]`、終わりの `.` `,` `:` `;` `!` は含めない。段は `/` と `\/` のどちらでも区切り、区切りは元の形で残す。スキームの無い URL は `//` の直後にも当て、ポートを許す（1 つの `/` の後ろは外す）。`lodash.merge/index.js` のようなファイルのパスにも当たるが、伏せすぎる側として受け入れる | `for https://hooks.slack.com/services/{…}/{…}/{…}`・`file_get_contents(https://discord.com/api/webhooks/{…}/{…})`・`https://api.example.com/v1/users/{…}です` | `https://host.example/x`・`` `POST https://api.example.com/v1/charges` ``・`…/v1/users. Retry` |
+| 8b | URL のパス。スキームのある URL・`\/` でエスケープした URL・ホストの形で始まる URL（`hooks.slack.com/…`）のパスを、段ごとの許可リスト（英小文字の段と `v1` のような段だけ残し、ほかは `{…}`。組み立て直す HTTP の文言と同じ `UrlPath`）に通す。キーと値の後に当てる（先に `{…}` にすると、引用符の無い値が `}` で止まる）。パスは ASCII の文字だけで、`` ` ``、終わりの `.` `,` `:` `;` `!` `]` は含めない（途中の `]` はパスの中、終わりの `]` は `[https://…]` の閉じ括弧として残す）。段は `/` と `\/` のどちらでも区切り、区切りは元の形で残す。スキームの無い URL は `//`・`\/\/` の直後にも当て、ホストの後ろは `/` と `\/` のどちらも受け、ポートを許す（1 つの `/` の後ろは外す）。`lodash.merge/index.js` のようなファイルのパスにも当たるが、伏せすぎる側として受け入れる | `for https://hooks.slack.com/services/{…}/{…}/{…}`・`file_get_contents(https://discord.com/api/webhooks/{…}/{…})`・`https://api.example.com/v1/users/{…}です` | `https://host.example/x`・`` `POST https://api.example.com/v1/charges` ``・`…/v1/users. Retry` |
 | 9 | 長い英数字 | 32 文字以上の 16 進・base64 のトークン・`session_{40 文字の 16 進}`・文の終わりが `.` のトークン | 長い snake_case・長いクラス名・UUID・`storage/app/{32 文字}.pdf` |
 | 10 | 使う側の `message_redact_patterns` | 当たった所 | — |
 
@@ -143,7 +144,7 @@ Laravel の `Process`（`ProcessFailedException`・`ProcessTimedOutException`）
 
 - 「外のコマンド」と書くのは、artisan の「コマンド: …」の入口の行と取り違えないため
 - 終了コードは Laravel は `$e->result->exitCode()`、Symfony は `$e->getProcess()->getExitCode()`、Messenger で動かした `RunProcessFailedException` は `$e->context->exitCode`
-- 秒数は Symfony の時間切れの例外の `getExceededTimeout()`。1 秒以上は小数 1 桁まで、1 秒未満は小数 2 桁まで（`0.04 秒`）、0.005 秒未満は「1 秒未満」
+- 秒数は Symfony の時間切れの例外の `getExceededTimeout()`。1 秒以上は小数 1 桁まで、1 秒未満は小数 2 桁まで（`0.04 秒`）、0.005 秒未満は「0.01 秒未満」
 
 ### ConnectionException
 

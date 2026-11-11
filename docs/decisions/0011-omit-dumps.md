@@ -42,4 +42,4 @@
 
 > 注記: 後の版で、形の分かる例外に外のコマンド（Laravel・Symfony の Process）の例外も加えた（[redaction.md](../redaction.md#組み立て直す例外)）。
 >
-> 注記: 後の版で、写したプロセスの文言（`The command "`・`The process "`）も、文言のどこに含んでも書き出しの目印として省くようにした。
+> 注記: 後の版で、写したプロセスの文言（`The command "…" failed.`・`The process "…" exceeded the timeout` の形。大文字小文字を区別しない）も、文言のどこに含んでも省くようにした。省く理由は書き出しとは分け、「（コマンドラインを含むので省いた。ログを見る）」にする（[redaction.md](../redaction.md#値の書き出しを含む文言は省く)）。
