@@ -31,7 +31,7 @@ use WeakMap;
  */
 final class JobEntrance
 {
-    /** @var list<array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool}> */
+    /** @var list<array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool, lingering: bool}> */
     private array $stack = [];
 
     /** @var WeakMap<Throwable, array{label: string, id: string, origin: ?string, sync: bool}> */
@@ -39,6 +39,16 @@ final class JobEntrance
 
     /** 前の JobProcessing の後に Laravel が Context を入れ替えた（ContextHydrated） */
     private bool $hydrated = false;
+
+    /**
+     * 部品が Context に残したジョブの ID。後のジョブの payload に写っても、発端（出した側の ID）として使わない
+     *
+     * @var array<string, true>
+     */
+    private array $left = [];
+
+    /** 覚えておく残した ID の数。長く動くワーカーで増え続けないようにする */
+    private const LEFT_LIMIT = 100;
 
     public function __construct(private readonly Config $config)
     {
@@ -66,8 +76,11 @@ final class JobEntrance
         $this->hydrated = false;
 
         $key = $this->key();
-        $had = Context::has($key);
         $previous = Context::get($key);
+        // 部品が残した ID は、出した側の ID ではない（前の sync のジョブの物）
+        $left = is_string($previous) && isset($this->left[$previous]);
+        $had = ! $left && Context::has($key);
+        $previous = $left ? null : $previous;
         $id = (string) Str::uuid();
 
         $name = $job->resolveName();
@@ -83,6 +96,7 @@ final class JobEntrance
             'had' => $had,
             'failed' => false,
             'sync' => $job instanceof SyncJob,
+            'lingering' => false,
         ];
         Context::add($key, $id);
     }
@@ -120,7 +134,12 @@ final class JobEntrance
         $uuid = $this->uuid($job);
         $frame = $this->find($uuid);
         if ($frame !== null && $frame['failed'] && $frame['origin'] === null) {
-            $this->stack = array_values(array_filter($this->stack, static fn (array $f): bool => $f['uuid'] !== $uuid));
+            // 段は捨てずに残し、入口の終わり（ending）で戻す
+            $this->stack = array_map(static fn (array $f): array => $f['uuid'] === $uuid ? [...$f, 'lingering' => true] : $f, $this->stack);
+            $this->left[$frame['id']] = true;
+            if (count($this->left) > self::LEFT_LIMIT) {
+                $this->left = array_slice($this->left, -self::LEFT_LIMIT, null, true);
+            }
 
             return;
         }
@@ -129,10 +148,26 @@ final class JobEntrance
     }
 
     /**
+     * 入口の終わり（CommandFinished・RequestHandled・アプリの terminating）。残したジョブの ID を戻す。
+     * Context がもう別の値なら（後のジョブが入れ替えた）触らない
+     */
+    public function ending(): void
+    {
+        $key = $this->key();
+        while (($top = end($this->stack)) !== false && $top['lingering']) {
+            array_pop($this->stack);
+            if (Context::get($key) === $top['id']) {
+                $this->restore($top);
+            }
+        }
+    }
+
+    /**
      * ワーカーの周の頭（Looping）と止まるとき（WorkerStopping）。失敗したまま戻していないジョブを戻す
      */
     public function settle(): void
     {
+        $this->ending();
         while (($top = end($this->stack)) !== false && $top['failed']) {
             array_pop($this->stack);
             $this->restore($top);
@@ -156,7 +191,7 @@ final class JobEntrance
     }
 
     /**
-     * @param array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool} $frame
+     * @param array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool, lingering: bool} $frame
      */
     private function restore(array $frame): void
     {
@@ -182,7 +217,7 @@ final class JobEntrance
     }
 
     /**
-     * @return array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool}|null
+     * @return array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool, lingering: bool}|null
      */
     private function find(string $uuid): ?array
     {

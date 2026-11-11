@@ -161,6 +161,8 @@ final class JobEntranceTest extends TestCase
                 report($e);
             }
             $ids[$round] = FailingJob::$seenRequestId;
+            // 同じ例外は間引かれるので、間を置く
+            $this->travel(61)->seconds();
         }
 
         $this->assertCount(2, $this->transport->sent);

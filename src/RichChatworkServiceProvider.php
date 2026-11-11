@@ -6,7 +6,8 @@ namespace Ad5\RichPhpChatwork;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Log\Context\Events\ContextHydrated;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobExceptionOccurred;
@@ -19,11 +20,23 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Symfony\Component\ErrorHandler\Error\FatalError;
 use Throwable;
+use WeakMap;
 
 final class RichChatworkServiceProvider extends ServiceProvider
 {
     /** メモリ切れのときに足すメモリ。部品の組み立て（数 MB）と Laravel の元の記録に足りる量 */
     private const MEMORY_ROOM = 32 * 1024 * 1024;
+
+    /** @var WeakMap<object, true> 送る callback を登録したハンドラー */
+    private WeakMap $attached;
+
+    private bool $warnedUnattachable = false;
+
+    public function __construct($app)
+    {
+        parent::__construct($app);
+        $this->attached = new WeakMap();
+    }
 
     public function register(): void
     {
@@ -52,43 +65,96 @@ final class RichChatworkServiceProvider extends ServiceProvider
 
         // 記録する例外（dontReport に当たらないもの）を送る。ログへの記録はそのまま続く
         $this->callAfterResolving(ExceptionHandler::class, function (ExceptionHandler $handler): void {
-            if ($handler instanceof Handler) {
-                // Handler::reportThrowable() は callback を try で包まない。ここから投げると Laravel が元の例外をログに書かずに終わる
-                $handler->reportable(function (Throwable $e): void {
-                    self::makeRoomForMemoryExhaustion($e);
-
-                    try {
-                        $this->app->make(Reporter::class)->report($e);
-                    } catch (Throwable $failure) {
-                        try {
-                            Log::warning('例外を Chatwork に送れなかった', ['exception' => $failure, 'original' => $e::class]);
-                        } catch (Throwable) {
-                            // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
-                        }
-                    }
-                });
-            }
+            $this->attach($handler);
         });
 
         $this->listenToJobs();
     }
 
     /**
-     * メモリ切れのときは、部品を動かす前に上限を少し上げる。Laravel は 32KB しか空けずに report() を呼び、部品の callback が
-     * 元の記録より先に動く。部品がメモリを取って 2 度目のメモリ切れを起こすと、元の記録まで止まる
+     * 例外のハンドラーに、送る callback を登録する。Laravel の Handler を継承しない物（コンソールの Collision の
+     * ExceptionHandler など）も、reportable() を持てば中の Handler に回すので、継承ではなく reportable() の有無で見る。
+     * resolve のたびに呼ばれうるので、同じハンドラーには 1 度だけ登録する
      */
-    private static function makeRoomForMemoryExhaustion(Throwable $e): void
+    public function attach(object $handler): void
+    {
+        if (isset($this->attached[$handler])) {
+            return;
+        }
+        $this->attached[$handler] = true;
+
+        if (! method_exists($handler, 'reportable')) {
+            if (! $this->warnedUnattachable) {
+                $this->warnedUnattachable = true;
+                try {
+                    Log::warning('例外のハンドラーに reportable が無いので、例外を Chatwork に知らせない', ['handler' => $handler::class]);
+                } catch (Throwable) {
+                    // ログにも書けないなら諦める
+                }
+            }
+
+            return;
+        }
+
+        // Handler::reportThrowable() は callback を try で包まない。ここから投げると Laravel が元の例外をログに書かずに終わる
+        $handler->reportable(function (Throwable $e): void {
+            try {
+                if (! self::makeRoomForMemoryExhaustion($e)) {
+                    return;
+                }
+                $this->app->make(Reporter::class)->report($e);
+            } catch (Throwable $failure) {
+                try {
+                    Log::warning('例外を Chatwork に送れなかった', ['exception' => $failure, 'original' => $e::class]);
+                } catch (Throwable) {
+                    // ログにも書けないなら諦める。元の例外の記録は Laravel 側で続く
+                }
+            }
+        });
+    }
+
+    /**
+     * メモリ切れのときは、部品を動かす前に上限を少し上げる。Laravel は 32KB しか空けずに report() を呼び、部品の callback が
+     * 元の記録より先に動く。部品がメモリを取って 2 度目のメモリ切れを起こすと、元の記録まで止まる。
+     * 上げられなければ false（部品を動かさず、元の記録は Laravel に任せる）。上限は下げない
+     */
+    private static function makeRoomForMemoryExhaustion(Throwable $e): bool
     {
         if (! $e instanceof FatalError || ! str_starts_with($e->getMessage(), 'Allowed memory size of')) {
-            return;
+            return true;
         }
 
-        $limit = ini_get('memory_limit');
-        if ($limit === '-1') {
-            return;
+        $current = self::bytes((string) ini_get('memory_limit'));
+        if ($current === null) {
+            return true;
         }
 
-        @ini_set('memory_limit', (string) (memory_get_usage(true) + self::MEMORY_ROOM));
+        $wanted = memory_get_usage(true) + self::MEMORY_ROOM;
+        if ($current >= $wanted) {
+            return true;
+        }
+
+        return @ini_set('memory_limit', (string) $wanted) !== false && (self::bytes((string) ini_get('memory_limit')) ?? PHP_INT_MAX) >= $wanted;
+    }
+
+    /**
+     * memory_limit の文字（512M・1G・数字）をバイトに。-1（上限なし）は null
+     */
+    private static function bytes(string $limit): ?int
+    {
+        $limit = trim($limit);
+        if ($limit === '-1' || $limit === '') {
+            return null;
+        }
+
+        $number = (int) $limit;
+
+        return match (strtolower(substr($limit, -1))) {
+            'g' => $number * 1024 * 1024 * 1024,
+            'm' => $number * 1024 * 1024,
+            'k' => $number * 1024,
+            default => $number,
+        };
     }
 
     /**
@@ -132,6 +198,13 @@ final class RichChatworkServiceProvider extends ServiceProvider
         });
         $events->listen(WorkerStopping::class, static function () use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->settle());
+        });
+        // 入口の終わり。出した側に ID が無い sync の失敗で残したジョブの ID を戻す
+        $events->listen([CommandFinished::class, RequestHandled::class], static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->ending());
+        });
+        $this->app->terminating(static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->ending());
         });
     }
 }
