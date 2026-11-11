@@ -84,7 +84,9 @@ Reporter::resolveUserUsing(fn (): ?string => auth('staff')->hasUser() ? 'スタ�
 
 Request ID は、入口のミドルウェアで `Context::add('request_id', …)` のように文字で入れておく。バッチはコマンドの始まりで `Context::add('command', …)`（名前だけを出す）。HTTP のリクエストは部品がルートのテンプレート（`PUT /api/employees/{employee}`）を読むので、入れなくてよい。`request` は、ルートを持たない入口（コンソールで動く独自の入口）で明示するときだけ使う。
 
-キューのジョブは部品が自分で見分ける。ジョブの間は Context の Request ID をジョブ用の新しい ID に入れ替え（ログもその ID で引ける）、ディスパッチした側の ID を「発端の Request ID」として出す。ジョブが終われば元の ID に戻す。
+キューのジョブは部品が自分で見分ける。ジョブの間は Context の Request ID をジョブ用の新しい ID に入れ替え（ログもその ID で引ける）、ディスパッチした側の ID を「発端の Request ID」として出す。ジョブが終われば、Laravel が例外を記録した後に元の ID に戻す。
+
+sync のジョブ（`dispatchSync` ではなく sync のキュー）で失敗して呼び出し側（HTTP など）で記録されたときは、例外の記録は呼び出し側の ID で書かれる。そのとき知らせは「Request ID: {ジョブの ID}（ジョブの中のログ）」と「発端の Request ID: {呼び出し側の ID}（例外の記録はこの番号）」に分けて書く。呼び出し側に ID が無ければ、ジョブの ID をそのまま残し、例外の記録もその番号で引ける。
 
 ## 例外ではない知らせ
 
