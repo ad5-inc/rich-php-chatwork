@@ -32,6 +32,7 @@ final class Redactor
         '/\{"|\["|\\\\"/',                // JSON とエスケープした JSON
         '/%5[BD]/i',                      // http_build_query の角括弧
         '/%7B%22|%5B%22|%22%3A/i',        // URL エンコードした JSON
+        '/\bThe (?:command|process) "/',  // 写したプロセスの文言（コマンドラインに -p の後ろのパスワードなどが入る）
     ];
 
     /** 1 行目がこれなら、改行のほかに目印が無くても書き出しの頭とみなす（JSON_PRETTY_PRINT・print_r・var_export の 1 行目） */
@@ -102,10 +103,6 @@ final class Redactor
      */
     public static function firstLineOfPlainText(string $text): ?string
     {
-        // ほかの例外が Process の文言（1 行目にコマンドライン）を写した物。1 行目にパスワードの引数が入りうる
-        if (str_starts_with($text, 'The command "') || str_starts_with($text, 'The process "')) {
-            return null;
-        }
 
         $normalized = self::normalize($text);
         $others = array_filter(self::DUMP_MARKERS, static fn (string $pattern): bool => $pattern !== '/\n/');
@@ -206,17 +203,19 @@ final class Redactor
     /**
      * URL のパスを段ごとの許可リストに通す（Guzzle の文言・file_get_contents の警告の Webhook の秘密）。
      * スキームのある URL、\/ でエスケープした URL、ホストの形（hooks.slack.com/…）で始まるスキームの無い URL。
-     * パスは ASCII の文字だけ（日本語・全角の句読点・` の手前で止める）で、終わりの . , : ; は含めない
+     * パスは ASCII の文字だけ（日本語・全角の句読点・`・] の手前で止める）で、終わりの . , : ; ! は含めない
      */
     private function urlPaths(string $text): ?string
     {
-        $path = '[^\x00-\x20?#"\'<>()`\x7F-\x{10FFFF}]*';
+        $path = '[^\x00-\x20?#"\'<>()`\]\x7F-\x{10FFFF}]*';
         $redact = self::redactPath(...);
 
         // /i は付けない（\x7F 以上の範囲が大文字小文字の同一視で s・k に当たり、パスが途中で止まる）
         $text = Text::replace('/(\b[A-Za-z][A-Za-z0-9+.\-]*:(?:\/\/|\\\\\/\\\\\/)[^\s\/\\\\?#"\'<>()`]+)((?:\/|\\\\\/)' . $path . ')/u', $redact, $text);
 
-        return $text === null ? null : Text::replace('/(?<![A-Za-z0-9.\-\/@:\\\\])((?:[a-z0-9\-]+\.)+[a-z]{2,})(\/' . $path . ')/u', $redact, $text);
+        // スキームの無い URL。// の直後（//host/…）は当て、1 つの / の後ろ（ファイルのパスの途中）と、上で済ませたスキームのある URL は外す。ポートを許す。
+        // lodash.merge/index.js のようなファイルのパスにも当たるが、伏せすぎる側として受け入れる
+        return $text === null ? null : Text::replace('/(?<![A-Za-z0-9.\-@:\\\\])(?<![^\/]\/)(?<!^\/)(?<!:\/\/)(?<!:\\\\\/\\\\\/)((?:[a-z0-9\-]+\.)+[a-z]{2,}(?::\d{1,5})?)(\/' . $path . ')/u', $redact, $text);
     }
 
     /**
@@ -224,10 +223,9 @@ final class Redactor
      */
     private static function redactPath(array $match): string
     {
-        $path = rtrim($match[2], '.,:;');
-        $separator = str_contains($path, '\\/') ? '\\/' : '/';
+        $path = rtrim($match[2], '.,:;!');
 
-        return $match[1] . UrlPath::redact($path, $separator) . substr($match[2], strlen($path));
+        return $match[1] . UrlPath::redact($path) . substr($match[2], strlen($path));
     }
 
     /**

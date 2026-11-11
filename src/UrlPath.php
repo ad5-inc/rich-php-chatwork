@@ -14,13 +14,15 @@ final class UrlPath
     private const SEGMENTS = ['/\A[a-z][a-z_-]{0,30}\z/', '/\Av\d{1,2}\z/'];
 
     /**
-     * @param non-empty-string $separator 段の区切り（JSON でエスケープした URL なら \/）
+     * 段は / と \/（JSON でエスケープした URL）のどちらでも区切り、区切りは元の形で残す（混ざっていてもよい）
      */
-    public static function redact(string $path, string $separator = '/'): string
+    public static function redact(string $path): string
     {
-        return implode($separator, array_map(
-            static fn (string $segment): string => $segment === '' || array_any(self::SEGMENTS, static fn (string $pattern): bool => preg_match($pattern, $segment) === 1) ? $segment : '{…}',
-            explode($separator, $path),
+        $parts = preg_split('/(\\\\\/|\/)/', $path, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$path];
+
+        return implode('', array_map(
+            static fn (string $part): string => $part === '' || $part === '/' || $part === '\\/' || array_any(self::SEGMENTS, static fn (string $pattern): bool => preg_match($pattern, $part) === 1) ? $part : '{…}',
+            $parts,
         ));
     }
 }
