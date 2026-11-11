@@ -14,10 +14,22 @@ final class Redactor
 {
     public const MARK = '（伏せた）';
 
-    private const KEY_WORDS = 'password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|パスワード|暗証番号|トークン';
+    private const JAPANESE_KEY_WORDS = 'パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム';
 
-    /** キーの後ろの区切り。語の前に境界は求めず（remember_token・XSRF-TOKEN）、語の後ろの続き（password_confirmation）は許す */
-    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*[\'"]?\s*(?:=>|=|:|：)\s*)';
+    private const KEY_WORDS = 'password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
+
+    /**
+     * キーの後ろの区切り。語の前に境界は求めず（remember_token・XSRF-TOKEN）、語の後ろの続き（password_confirmation）は許す。
+     * print_r（[password] => x）・角括弧のキー（user[password]=x）・エスケープした JSON（\"password\":）のため、] と \ を許す
+     */
+    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*\]?(?:\\\\)?[\'"]?\s*(?:=>|=|:|：)\s*)';
+
+    /**
+     * 全角を揃えると値の区切りになる文字。揃える前に私用の文字へ逃がし、値の中として扱う（hun，ter2 の ter2 を残さない）。伏せた後に戻す
+     *
+     * @var array<string, string>
+     */
+    private const KEEP_FULLWIDTH = ['，' => "\u{E000}", '；' => "\u{E001}", '＆' => "\u{E002}", '｝' => "\u{E003}"];
 
     private const QUOTED = '"(?:[^"\\\\]|\\\\.)*(?:"|\z)|\'(?:[^\'\\\\]|\\\\.)*(?:\'|\z)';
 
@@ -31,7 +43,7 @@ final class Redactor
     ];
 
     /** 電話番号の区切り（NFKC で揃えた後に残る全角の - と長音、空白・.・括弧） */
-    private const PHONE_SEPARATOR = '[\-‐−ー－\s.()]';
+    private const PHONE_SEPARATOR = '[\-‐−ー－–—\/\s.()]';
 
     /** URL か、空白・引用符などの直後の / で始まるパスの、? 以降 */
     private const QUERY = '/((?:\b[a-z][a-z0-9+.\-]*:\/\/|(?<=^|[\s"\'(=])\/)[^\s?#"\'<>]*)\?[^\s#"\'<>]+/iu';
@@ -54,8 +66,8 @@ final class Redactor
      */
     public function message(string $text): ?string
     {
-        $text = $this->copiedQuery(self::normalize($text));
-        foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), $this->keyValue(false)] as [$pattern, $replacement]) {
+        $text = $this->copiedQuery(self::normalize(strtr($text, self::KEEP_FULLWIDTH)));
+        foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), self::japaneseKey(), $this->keyValue(false)] as [$pattern, $replacement]) {
             $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         }
         $text = $text === null ? null : $this->longAlnum($text);
@@ -64,7 +76,7 @@ final class Redactor
             $text = $text === null ? null : Text::replace($pattern, self::MARK, $text);
         }
 
-        return $text;
+        return $text === null ? null : strtr($text, array_flip(self::KEEP_FULLWIDTH));
     }
 
     /**
@@ -111,7 +123,7 @@ final class Redactor
     }
 
     /**
-     * 全角の数字・記号・＠ を半角に揃える（伏せる規則を当てる前に）。intl が無ければ mb_convert_kana で英数字・記号・空白だけ揃える
+     * 全角の数字・記号・＠ を半角に揃える（伏せる規則を当てる前に）。intl が無ければ mb_convert_kana で英数字・記号・空白・半角カナを揃える
      */
     private static function normalize(string $text): string
     {
@@ -122,7 +134,7 @@ final class Redactor
             }
         }
 
-        return mb_convert_kana($text, 'as', 'UTF-8');
+        return mb_convert_kana($text, 'KVas', 'UTF-8');
     }
 
     /**
@@ -136,6 +148,16 @@ final class Redactor
     }
 
     /**
+     * 日本語のキーに限り、「パスワードは xxx」「確認コード「xxx」」の形にも当てる。値の終わりは空白か 」 か 。
+     *
+     * @return array{string, string}
+     */
+    private static function japaneseKey(): array
+    {
+        return ['/((?:' . self::JAPANESE_KEY_WORDS . ')(?:パスワード)?\s*(?:は|「)\s*)[^\s」。]+/u', '$1' . self::MARK];
+    }
+
+    /**
      * 規則 7b（電話番号・マイナンバー・口座番号）。メッセージと notice だけに当てる。
      * 前後が英数字・_・- の所は外す（16 進のトークンの頭・UUID の最後の 12 桁・ファイル名の中の数字を伏せない）
      *
@@ -145,8 +167,8 @@ final class Redactor
     {
         return [
             // 0[1-9] に絞り、0 埋めの社員コード（0012345678 など）は残す。+81 は頭の 0 の代わり
-            ['/(?<![A-Za-z0-9_\-])(?:\(?0[1-9]|\+81' . self::PHONE_SEPARATOR . '*\(?[1-9])(?:' . self::PHONE_SEPARATOR . '*[0-9]){8,9}(?![A-Za-z0-9_\-])/u', self::MARK],
-            ['/(?<![A-Za-z0-9_\-])[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}(?![A-Za-z0-9_\-])/u', self::MARK],
+            ['/(?<![A-Za-z0-9_\-])(?:\(?0[1-9]|\+81' . self::PHONE_SEPARATOR . '*(?:\(0\))?' . self::PHONE_SEPARATOR . '*\(?[1-9])(?:' . self::PHONE_SEPARATOR . '*[0-9]){8,9}(?![A-Za-z0-9_\-])/u', self::MARK],
+            ['/(?<![A-Za-z0-9_\-])[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}(?![A-Za-z0-9_\-])/u', self::MARK],
             ['/((?:口座|account).{0,20}?)(?<![0-9])[0-9]{7}(?![0-9])/iu', '$1' . self::MARK],
         ];
     }
@@ -178,7 +200,7 @@ final class Redactor
             if ($failure !== null) {
                 return rtrim($failure);
             }
-            if (preg_match('/SQLSTATE\[[0-9A-Z]{5}\]/', $text, $match, PREG_OFFSET_CAPTURE) === 1) {
+            if (preg_match('/SQLSTATE\[[0-9A-Z]{5}\](?: \[\d{1,5}\])?/', $text, $match, PREG_OFFSET_CAPTURE) === 1) {
                 return substr($text, 0, $match[0][1] + strlen($match[0][0])) . ' ' . self::MARK;
             }
 
@@ -187,7 +209,7 @@ final class Redactor
 
         $head = substr($text, 0, $start);
         $tail = substr($text, $start);
-        $head = self::connectionFailure($head) ?? $this->driverValues($head);
+        $head = $this->copiedHead($head);
         if ($head === null) {
             return null;
         }
@@ -198,9 +220,9 @@ final class Redactor
         }
 
         $name = substr($tail, strlen('(Connection: '), max(0, (int) strpos($tail, ',') - strlen('(Connection: ')));
-        // 後ろの「 (View: …)」の繰り返しはビューの場所なので残す
+        // 後ろの「 (View: ….php)」の繰り返しはビューの場所なので残す（パスの形のときだけ）
         $views = '';
-        while (preg_match('/ \(View: [^()]*\)\z/u', $tail, $match) === 1) {
+        while (preg_match('/ \(View: [^()]*\.php\)\z/u', $tail, $match) === 1) {
             $views = $match[0] . $views;
             $tail = substr($tail, 0, -strlen($match[0]));
         }
@@ -208,6 +230,32 @@ final class Redactor
         $connection = preg_match(Details::CONNECTION, $name) === 1 ? $name : self::MARK;
 
         return "{$head}(Connection: {$connection}, SQL: （ログ）){$views}";
+    }
+
+    /**
+     * 写された文言の「(Connection: 」より前。接続の失敗なら固定の言葉、ドライバーの文言が許可リストの形なら値だけ伏せ、
+     * どちらでもなければ SQLSTATE（[番号] があればそこまで）より後ろを伏せる（1049 のデータベース名・pgsql の Key (…)=(…) など）
+     */
+    private function copiedHead(string $head): ?string
+    {
+        $failure = self::connectionFailure($head);
+        if ($failure !== null) {
+            return $failure;
+        }
+
+        if (preg_match('/\A(.*?)(SQLSTATE\[[0-9A-Z]{5}\])(: [A-Za-z ,\/\-]{1,80}: \d{1,5} )?(.*)\z/s', $head, $match) !== 1) {
+            return $this->driverValues($head);
+        }
+
+        [, $before, $state, $described, $rest] = $match;
+        $allowed = $described === '' ? null : DriverMessage::redact(rtrim($rest));
+        if ($allowed !== null) {
+            return "{$before}{$state}{$described}{$allowed} ";
+        }
+
+        $number = preg_match('/\A \[\d{1,5}\]/', $rest, $bracket) === 1 ? $bracket[0] : '';
+
+        return "{$before}{$state}{$number} " . self::MARK . ' ';
     }
 
     /**
