@@ -92,6 +92,11 @@ final class RedactorTest extends PlainTestCase
         yield 'バッククォートで囲んだ URL' => ['Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response', 'Server error: `POST https://api.example.com/v1/charges` resulted in a `500 Internal Server Error` response'];
         yield '文の終わりの . の前の URL' => ['GET https://api.example.com/v1/users. Retry', 'GET https://api.example.com/v1/users. Retry'];
         yield '日本語が続く URL' => ['https://api.example.com/v1/users/12345です', 'https://api.example.com/v1/users/{…}です'];
+        yield '角括弧で囲んだ URL' => ['Webhook [https://hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecret12] failed', 'Webhook [https://hooks.slack.example/services/{…}/{…}/{…}] failed'];
+        yield '! で終わる URL' => ['GET https://api.example.com/v1/users/42!', 'GET https://api.example.com/v1/users/{…}!'];
+        yield '/ と \\/ が混ざる URL' => ['GET https://api.example.com/v1/a\\/b/12345 end', 'GET https://api.example.com/v1/a\\/b/{…} end'];
+        yield '// で始まるスキームの無い URL' => ['src //hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecret12 end', 'src //hooks.slack.example/services/{…}/{…}/{…} end'];
+        yield 'ポートのあるスキームの無い URL' => ['post hooks.example.com:8443/hook/T0PROBE01 end', 'post hooks.example.com:8443/hook/{…} end'];
         yield 'Amex' => ['card 3782 822463 10005 end', 'card （伏せた） end'];
         yield 'Diners' => ['card 3056-930902-5904 end', 'card （伏せた） end'];
         yield 'スキームの無い URL' => ['post to hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12 failed', 'post to hooks.slack.example/services/{…}/{…}/{…} failed'];

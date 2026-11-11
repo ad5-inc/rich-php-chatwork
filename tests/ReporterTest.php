@@ -137,7 +137,10 @@ final class ReporterTest extends TestCase
         yield '1 行目が {' => ["{\n    \"pin\": \"probe-pw-20\"\n}", ['probe-pw-20']];
         yield '1 行目が array (' => ["array (\n  'pin' => 'probe-pw-21',\n)", ['probe-pw-21']];
         yield 'プロセスの文言を写した物' => ["The command \"mysqldump -pS3cretPw hito\" failed.\n\nExit Code: 2", ['S3cretPw']];
-        yield 'プロセスの時間切れを写した物' => ["The process \"mysqldump -pS3cretPw\" exceeded the timeout of 60 seconds.\nprobe", ['S3cretPw']];
+        yield 'プロセスの時間切れを写した物（1 行）' => ['The process "mysqldump -uroot -pS3cretPw hito" exceeded the timeout of 60 seconds.', ['S3cretPw']];
+        yield '前置き付きのプロセスの失敗の写し' => ["Backup failed: The command \"mysqldump -pS3cret db\" failed.\n\nExit Code: 2", ['S3cret']];
+        yield '前置き付きの時間切れの写し' => ['Backup failed: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.', ['S3cret']];
+        yield '先頭に空白がある写し' => ['  The command "mysqldump -pS3cret db" failed.', ['S3cret']];
         yield '1 行目の終わりが {' => ["payload {\n  \"pin\": \"probe-pw-22\"\n}", ['probe-pw-22']];
     }
 
@@ -215,6 +218,25 @@ final class ReporterTest extends TestCase
 
         $this->assertStringStartsWith('[info][title]Probe（production）ClientException: HTTP 429[/title]', $body);
         $this->assertSame('HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+    }
+
+    #[Test]
+    public function noticeの地の文の行でも_写したプロセスの文言は省く(): void
+    {
+        $this->reporter()->notice('バックアップ', ['失敗した: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.'], 'backup');
+
+        $this->assertStringContainsString('[/title]（値の書き出しを含むので省いた。ログを見る）[/info]', $this->transport->sent[0]['body']);
+        $this->assertStringNotContainsString('S3cret', $this->transport->sent[0]['body']);
+    }
+
+    #[Test]
+    public function 空白だけの文言は_空の枠を出さない(): void
+    {
+        config(['rich-chatwork.send_message' => true]);
+
+        $body = $this->reporter()->body($this->failWithMessage(" \n\t "));
+
+        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException[/title]アプリの行: ', $body);
     }
 
     #[Test]

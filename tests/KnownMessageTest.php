@@ -153,8 +153,8 @@ final class KnownMessageTest extends PlainTestCase
         $symfony = new \Symfony\Component\Process\Exception\ProcessFailedException($process);
 
         foreach ([$laravel, $symfony] as $e) {
-            $this->assertSame('コマンドの失敗（終了コード 2、コマンドはログ）', KnownMessage::of($e));
-            $this->assertSame('コマンドの失敗・終了コード 2', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+            $this->assertSame('外のコマンドの失敗（終了コード 2、コマンドラインはログ）', KnownMessage::of($e));
+            $this->assertSame('外のコマンドの失敗・終了コード 2', \Ad5\RichPhpChatwork\Details::of($e)->summary);
         }
     }
 
@@ -171,12 +171,44 @@ final class KnownMessageTest extends PlainTestCase
 
         $laravel = new \Illuminate\Process\Exceptions\ProcessTimedOutException($timeout, new \Illuminate\Process\ProcessResult($process));
         foreach ([$timeout, $laravel] as $e) {
-            $this->assertSame('コマンドの時間切れ（0.2 秒、コマンドはログ）', KnownMessage::of($e));
-            $this->assertSame('コマンドの時間切れ・0.2 秒', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+            $this->assertSame('外のコマンドの時間切れ（0.2 秒、コマンドラインはログ）', KnownMessage::of($e));
+            $this->assertSame('外のコマンドの時間切れ・0.2 秒', \Ad5\RichPhpChatwork\Details::of($e)->summary);
         }
 
         $start = new \Symfony\Component\Process\Exception\ProcessStartFailedException(new \Symfony\Component\Process\Process(['probe-cli', '-pS3cretPw']), 'probe');
-        $this->assertSame('コマンドを起動できなかった（コマンドはログ）', KnownMessage::of($start));
+        $this->assertSame('外のコマンドを起動できなかった（コマンドラインはログ）', KnownMessage::of($start));
+    }
+
+    #[Test]
+    public function 時間切れの秒数は_1秒未満なら小数2桁で_もっと短ければ1秒未満と書く(): void
+    {
+        $this->assertSame('外のコマンドの時間切れ（0.04 秒、コマンドラインはログ）', KnownMessage::of($this->timedOut(0.04)));
+        $this->assertSame('外のコマンドの時間切れ（1 秒未満、コマンドラインはログ）', KnownMessage::of($this->timedOut(0.001)));
+        $this->assertSame('外のコマンドの時間切れ・1 秒未満', \Ad5\RichPhpChatwork\Details::of($this->timedOut(0.001))->summary);
+    }
+
+    #[Test]
+    public function Messengerで動かしたプロセスの失敗は_文脈の終了コードを出す(): void
+    {
+        $process = new \Symfony\Component\Process\Process(['sh', '-c', 'exit 3', '--', '-pS3cretPw']);
+        $process->run();
+        $context = new \Symfony\Component\Process\Messenger\RunProcessContext(new \Symfony\Component\Process\Messenger\RunProcessMessage(['sh', '-c', 'exit 3']), $process);
+        $e = new \Symfony\Component\Process\Exception\RunProcessFailedException(new \Symfony\Component\Process\Exception\ProcessFailedException($process), $context);
+
+        $this->assertSame('外のコマンドの失敗（終了コード 3、コマンドラインはログ）', KnownMessage::of($e));
+    }
+
+    private function timedOut(float $seconds): \Symfony\Component\Process\Exception\ProcessTimedOutException
+    {
+        $process = new \Symfony\Component\Process\Process(['sh', '-c', 'sleep 2']);
+        $process->setTimeout($seconds);
+        try {
+            $process->run();
+        } catch (\Symfony\Component\Process\Exception\ProcessTimedOutException $e) {
+            return $e;
+        }
+
+        $this->fail('時間切れにならなかった');
     }
 
     #[Test]
