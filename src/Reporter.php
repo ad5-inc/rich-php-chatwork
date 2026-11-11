@@ -451,7 +451,7 @@ final class Reporter
         if ($assembled !== null) {
             return Text::field($assembled, true, null, $width);
         }
-        if ($this->config->get('rich-chatwork.send_message') !== true || $main->getMessage() === '') {
+        if ($this->config->get('rich-chatwork.send_message') !== true || rtrim($main->getMessage()) === '') {
             return null;
         }
 
