@@ -725,7 +725,11 @@ final class Reporter
     private function expand(string $key, string $default): string
     {
         $template = $this->config->get("rich-chatwork.{$key}");
-        $app = $this->config->get('app.name');
+        // 件名の名前は APP_NAME。REPORT_CHATWORK_APP_NAME があるときだけ、それで上書きする
+        $app = $this->config->get('rich-chatwork.app_name');
+        if (! is_string($app) || $app === '') {
+            $app = $this->config->get('app.name');
+        }
 
         return str_replace(
             ['{app}', '{env}'],

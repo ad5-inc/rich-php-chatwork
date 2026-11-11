@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.5.1（2026-11-11）
+
+### 足した物
+
+- 件名の名前を `.env` の `REPORT_CHATWORK_APP_NAME` で上書きできる。無ければ今までどおり `APP_NAME`
+- `[code]` の外で、Chatwork が絵文字に替える記号（`:D`・`:p`・`:o`・`(y)`・`(F)` など）に見えない文字（U+2060）を挟んで崩す（`Model::Delete` が「Model:😀elete」にならない）
+
 ## 0.5.0（2026-11-11）
 
 例外に入れた文字列を必ず出し、設定を送り先だけにした（[0012](docs/decisions/0012-always-send-message.md)）。

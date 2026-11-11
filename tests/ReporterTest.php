@@ -111,6 +111,26 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
+    public function 件名の名前は_REPORT_CHATWORK_APP_NAMEがあれば_APP_NAMEより先に使う(): void
+    {
+        $this->assertStringStartsWith('[info][title]Probe（production）RuntimeException[/title]', $this->reporter()->body($this->failWithMessage('x')));
+
+        config(['rich-chatwork.app_name' => 'ひとづくりCloud']);
+
+        $this->assertStringStartsWith('[info][title]ひとづくりCloud（production）RuntimeException[/title]', $this->reporter()->body($this->failWithMessage('x')));
+    }
+
+    #[Test]
+    public function 枠の外の絵文字の記号は_見えない文字を挟んで崩し_枠の中は崩さない(): void
+    {
+        $body = $this->reporter()->body($this->failWithMessage('Model::Delete と Pipeline::prepare は (y) (F)'));
+
+        $joiner = "\u{2060}";
+        $this->assertStringContainsString("[code]Model::Delete と Pipeline::prepare は (y) (F)[/code]", $body);
+        $this->assertSame("Model::{$joiner}Delete ｜ ({$joiner}y) ］:{$joiner}) report:daily (Y) (f)", \Ad5\RichPhpChatwork\Text::escape('Model::Delete ｜ (y) ]:) report:daily (Y) (f)', false));
+    }
+
+    #[Test]
     public function 文字を直してから伏せ_逃がしてから切る(): void
     {
 
@@ -474,7 +494,7 @@ final class ReporterTest extends TestCase
         $transport = $this->app?->make(\Ad5\RichPhpChatwork\Transport::class);
         $this->assertInstanceOf(PhpChatworkTransport::class, $transport);
         $this->assertSame(180.0, new \ReflectionProperty($transport, 'timeout')->getValue($transport));
-        $this->assertSame(require dirname(__DIR__) . '/config/rich-chatwork.php', ['access_token' => null, 'room_id' => null]);
+        $this->assertSame(require dirname(__DIR__) . '/config/rich-chatwork.php', ['access_token' => null, 'room_id' => null, 'app_name' => null]);
     }
 
     #[Test]
