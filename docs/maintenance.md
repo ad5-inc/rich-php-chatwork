@@ -58,7 +58,8 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 
 | vendor の所 | 頼っていること | 壊れたら |
 | --- | --- | --- |
-| `Illuminate/Foundation/Exceptions/Handler.php`（`reportThrowable`） | `reportable()` の callback を try で包まない（部品の側で包んでいる） | 部品が投げると元の例外が記録されない |
+| `Illuminate/Foundation/Exceptions/Handler.php`（`reportThrowable`） | `reportable()` の callback を try で包まず、元の記録より先に呼ぶ（部品の側で包んでいる） | 部品が投げると元の例外が記録されない |
+| `Illuminate/Foundation/Bootstrap/HandleExceptions.php` | メモリ切れのときに 32KB だけ空けて `report()` を呼ぶ（部品は callback の頭で上限を上げる） | メモリ切れで元の記録まで止まる（`MemoryExhaustionTest`） |
 | `Illuminate/Queue/Worker.php`（`process`・`handleJobException`・`runJob`・`daemonShouldRun`） | 失敗のイベント（`JobFailed`・`JobExceptionOccurred`）の後、`process()` の外の `runJob()` で `report()` を呼ぶ。`JobAttempted` は `process()` の finally で `report()` より前。`Looping` は周の頭に `until()` で出る | ジョブの行が出ない。ログと知らせの Request ID がずれる |
 | `Illuminate/Queue/SyncQueue.php`（`executeJob`・`handleException`） | 失敗のイベントの後、`JobAttempted`（finally）を出して例外を呼び出し元まで投げる。ジョブは `SyncJob` | 同上 |
 | `Illuminate/Log/Context/ContextServiceProvider.php` | `JobProcessing` で Context を payload の物に入れ替える（hydrate は flush してから入れる）。部品の listener はこれより後に動く | ジョブの Request ID がディスパッチした側の物に戻る |
@@ -67,10 +68,12 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 | `Illuminate/Http/Client/PendingRequest.php` | `ConnectionException` の previous が Guzzle の例外 | ホストが出ない |
 | `Illuminate/Cache/FileStore.php` | `add()` が flock で排他する（予備の一時フォルダの印） | プロセスをまたいだ間引きが効かない |
 | `Illuminate/Log/Context/ContextLogProcessor.php` | ログに Context（`request_id`）を付ける | ログと知らせの Request ID を揃える前提が崩れる |
+| `Illuminate/Log/Context/Repository.php`（`hydrate`） | JobProcessing で Context を入れ替え、`ContextHydrated` を出す | 戻していない印を捨てるか戻すかの判断がずれる |
+| `Illuminate/Cache/NullStore.php` | `add` が投げずに false を返す（部品は印が無ければ値を持てない置き場とみなす） | 間引きと上限が効かず、知らせが届かない |
 | `Illuminate/View/Engines/CompilerEngine.php` | ビューの例外を `ViewException` で包み、文言の末尾に ` (View: 絶対パス)` を付ける | 包んだビューが出ない |
 | `Symfony/Component/ErrorHandler/Error/FatalError.php` | 呼び出しの並びを渡さないと空になる | メモリ切れで「取れない」が出る（想定どおり） |
 
-PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。テストの環境（`php:8.5-cli`）には intl が無く、全角を揃える処理は `mb_convert_kana()` の側を通る。intl のある環境の `Normalizer` の側は手で確かめる。
+PHP を上げたら、匿名クラス・クロージャの名前の形（`NamesTest`）と、PHP が作る文言の形（`DetailsTest` の TypeError・メモリ切れ）を見る。メモリ切れは別のプロセス（`tests/bin/exhaust-memory.php`）で起こして確かめる。そのスクリプトは Collision を避けて Laravel のハンドラーを使う（コンソールの Collision は Laravel のハンドラーを包み、部品の `reportable()` が登録されない）。テストの環境（`php:8.5-cli`）には intl が無く、全角を揃える処理は `mb_convert_kana()` の側を通る。intl のある環境の `Normalizer` の側は手で確かめる。
 
 ## リリース
 

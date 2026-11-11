@@ -26,7 +26,7 @@
 
 | 順 | 規則 | 伏せる例 | 伏せない例 |
 | --- | --- | --- | --- |
-| 1 | 別の例外が写した DB の文言 | 最初の `(Connection: ` から後ろ: `(Connection: mysql, Host: …, SQL: select …)` → `(Connection: mysql, SQL: （ログ）)`。`, SQL: ` が無ければ（途中で切れた）そこから全部 `（伏せた）`。`(Connection: ` も無ければ `SQLSTATE[23000] （伏せた）`。前が接続の失敗なら `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ）` などの固定の言葉。許可リストの「伏せる所」もその場で伏せる | SQLSTATE・後ろの `(View: …)` の繰り返し |
+| 1 | 別の例外が写した DB の文言 | 最初の `(Connection: ` から後ろ: `(Connection: mysql, Host: …, SQL: select …)` → `(Connection: mysql, SQL: （ログ）)`。`, SQL: ` が無ければ（途中で切れた）そこから全部 `（伏せた）`。`(Connection: ` も無ければ `SQLSTATE[23000] （伏せた）`。前は、接続の失敗なら `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ）` などの固定の言葉、許可リストの形なら値だけ伏せ、どちらでもなければ `SQLSTATE[HY000] [1049] （伏せた）` のように SQLSTATE（`[番号]` があればそこまで）より後ろを伏せる（1044・1049・1130・2003・2005、pgsql の `Key (…)=(…)`・`Failing row contains (…)` など） | SQLSTATE・ドライバーの番号・後ろの `(View: ….php)` の繰り返し（パスの形のときだけ） |
 | 2 | JWT（`eyJ….….…`） | `jwt （伏せた）` | — |
 | 3 | パスワードのハッシュ（`$2y$…`・`$argon2id$…`） | `hash （伏せた）` | — |
 | 4 | `Bearer …`・`Basic …` | `Bearer （伏せた）` | — |
@@ -34,17 +34,18 @@
 | 6 | URL・パスの `?` 以降 | `GET /api/x?（伏せた）` | 前後のコードの `'/api/x?page=1'` |
 | 7 | メールアドレス（`@` の代わりの `%40` も） | `to （伏せた） failed` | リクエストの中（規則 6 だけ） |
 | 7b | 電話番号（`0[1-9]` か `+81` で始まる 10〜11 桁）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`０３－１２３４－５６７８`・`+81 90-1234-5678`・`(03)1234-5678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・`0012345678` のような 0 埋めの番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
-| 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
+| 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`[password] => （伏せた）`（print_r）・`user[password]=（伏せた）`・`{\"password\":（伏せた）}`（エスケープした JSON）・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）`・`パスワードは （伏せた） です`・`確認コード「（伏せた）」` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
 | 9 | 長い英数字 | 32 文字以上の 16 進・base64 のトークン・`session_{40 文字の 16 進}`・文の終わりが `.` のトークン | 長い snake_case・長いクラス名・UUID・`storage/app/{32 文字}.pdf` |
 | 10 | 使う側の `message_redact_patterns` | 当たった所 | — |
 
 ### 規則の細かい当たり方
 
-- **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana()` で英数字・記号・空白だけ揃える
-- **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。電話番号の区切りは `-‐−ー－`・空白・`.`・括弧。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
-- **規則 8 のキー**: `password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|パスワード|暗証番号|トークン`（大文字小文字を区別しない）
+- **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana('KVas')` で英数字・記号・空白・半角カナを揃える。値の区切りになる全角の `，` `；` `＆` `｝` は揃える前に逃がし、値の中として扱う（`password=hun，ter2` の `ter2` を残さない）
+- **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。電話番号とマイナンバーの区切りは `-‐−ー－–—/`・空白・`.`・括弧。`+81` の後ろの `(0)` も許す。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
+- **規則 8 のキー**: `password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム`（大文字小文字を区別しない）
   - 語の前に境界は求めない（`remember_token`・`XSRF-TOKEN` にも当たる）。語の後ろに `[A-Za-z0-9_-]*` が続いてよい（`password_confirmation`）
-  - キーの後ろは `['"]?\s*(=>|=|:|：)\s*`。これが無ければ当てない
+  - キーの後ろは `\]?\\?['"]?\s*(=>|=|:|：)\s*`（print_r の `]`、エスケープした JSON の `\` を許す）。これが無ければ当てない
+  - 日本語のキーに限り、区切りに `は`・`「` も許す。値の終わりは空白か `」`・`。`
   - `Authorization` の値は、方式（Bearer・Token・Digest など）ごと行末か `,` まで
   - 値: 引用符で始まれば、エスケープを考えて閉じる引用符まで（無ければ末尾まで）。引用符が無ければ空白では止めず、行末か `,`・`;`・`&`・`}`・`)` の手前まで（伏せすぎる側を受け入れる）。値は引用符ごと「（伏せた）」にする
   - `session_lifetime: 120` のような伏せなくてよい値も伏せる
