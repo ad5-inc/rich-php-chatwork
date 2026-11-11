@@ -14,17 +14,35 @@ final class Redactor
 {
     public const MARK = '（伏せた）';
 
+    public const DUMP_OMITTED = '（値の書き出しを含むので省いた。ログを見る）';
+
+    /**
+     * 値の書き出し（print_r・var_export・serialize・JSON・http_build_query）の目印。形の分からない例外の文言と notice の地の文に
+     * これが 1 つでもあれば、伏せずに丸ごと省く。書き出しの中の秘密は、入れ子・オブジェクトの protected / private・
+     * 長さの書かれた値など、正規表現で追いきれない形で来るため。普通の文を誤って省く側に倒れるのは受け入れる（秘密を出さない方が上）
+     *
+     * @var list<string>
+     */
+    private const DUMP_MARKERS = [
+        '/\n/',                          // 複数行（print_r・var_export・JSON_PRETTY_PRINT）
+        '/=>/',                           // 配列の書き出し
+        '/\b[sa]:\d+:[{"]|\bO:\d+:"/',   // serialize の文字列・配列・オブジェクト
+        '/\b[Aa]rray\s*\(|\w+ Object\s*\(|::__set_state/', // print_r・var_export
+        '/\{"|\["|\\\\"/',                // JSON とエスケープした JSON
+        '/%5[BD]/i',                      // http_build_query の角括弧
+    ];
+
     private const JAPANESE_KEY_WORDS = 'パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム';
 
     /** pass(?![a-z]) は db_pass・smtp_pass に当て、passed・passenger には当てない（password は先の語で当たる） */
-    private const KEY_WORDS = 'password|passwd|pwd|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
+    private const KEY_WORDS = 'password|passwd|pwd|passphrase|passcode|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
 
     /**
      * キーの後ろの区切り。語の前に境界は求めず（remember_token・XSRF-TOKEN）、語の後ろの続き（password_confirmation）は許す。
      * print_r（[password] => x）・角括弧のキー（user[password]=x、http_build_query の %5D）・何重にもエスケープした JSON
-     * （\"password\":・\\\"password\\\":）のため、] と %5D と \ の繰り返しを許す
+     * （\"password\":・\\\"password\\\":）・リストの添字（password[0]=・token[]=・tokens%5B0%5D=）のため、角括弧と \ の繰り返しを許す
      */
-    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*(?:\]|%5D)?(?:\\\\)*[\'"]?\s*(?:=>|=|:|：)\s*)';
+    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*(?:(?:\]|%5D)|(?:\[|%5B)[^\]=&%]*(?:\]|%5D))*(?:\\\\)*[\'"]?\s*(?:=>|=|:|：)\s*)';
 
     /**
      * 全角を揃えると値の区切りになる文字。揃える前に私用の文字へ逃がし、値の中として扱う（hun，ter2 の ter2 を残さない）。伏せた後に戻す
@@ -64,7 +82,17 @@ final class Redactor
     }
 
     /**
-     * 形の分からない例外の文言・notice の行と枠
+     * 値の書き出しの形を含むか。全角を揃えてから見る（｛＂ も JSON とみなす）
+     */
+    public static function containsDump(string $text): bool
+    {
+        $normalized = self::normalize($text);
+
+        return array_any(self::DUMP_MARKERS, static fn (string $pattern): bool => preg_match($pattern, $normalized) !== 0);
+    }
+
+    /**
+     * 形の分からない例外の文言・notice の行と枠。文言と notice の行は、先に containsDump() で書き出しを省いてから通す
      */
     public function message(string $text): ?string
     {

@@ -455,6 +455,12 @@ final class Reporter
             return null;
         }
 
+        // 値の書き出しを含む文言は伏せずに省く。目印の改行を残すよう、[code] の中の形で文字を直してから見る
+        $scrubbed = Text::scrub($main->getMessage(), true);
+        if ($scrubbed !== null && Redactor::containsDump($scrubbed)) {
+            return Text::field(Redactor::DUMP_OMITTED, true, null, $width);
+        }
+
         return Text::field($main->getMessage(), true, fn (string $text): ?string => $redactor->message($this->source->relativeIn($text)), $width);
     }
 
@@ -599,7 +605,14 @@ final class Reporter
     {
         $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
         $heading = Text::cut(Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ', false, null, self::TITLE_WIDTH) . Text::field($title, false, null, self::TITLE_WIDTH), self::TITLE_WIDTH);
-        $rows = array_map(static fn (string $line): string => Text::field($line, false, $redactor->message(...), self::LINE_WIDTH), $lines);
+        $rows = array_map(static function (string $line) use ($redactor): string {
+            // 地の文の行は、値の書き出しを含むなら行ごと省く（枠の中身は使う側が出す形を決めるので、伏せるだけにする）
+            $scrubbed = Text::scrub($line, true);
+
+            return $scrubbed !== null && Redactor::containsDump($scrubbed)
+                ? Redactor::DUMP_OMITTED
+                : Text::field($line, false, $redactor->message(...), self::LINE_WIDTH);
+        }, $lines);
         $codeLines = $code === null ? null : array_map(
             static fn (string $line): string => Text::field($line, true, $redactor->message(...), self::LINE_WIDTH),
             explode("\n", str_replace(["\r\n", "\r"], "\n", $code)),
