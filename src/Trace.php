@@ -10,14 +10,17 @@ use Throwable;
  * 引数の値を含めない道筋
  *
  * getTraceAsString() は php.ini の zend.exception_ignore_args が Off だと引数の値（人の名前やアドレス）を含むので使わない。
- * vendor の中を続けて通る段は 1 行にまとめ、アプリの段を FRAMES まで並べる
+ * vendor の中を続けて通る段は 1 行にまとめ、アプリの段を FRAMES まで並べる。名前は Names を通す（匿名クラス・クロージャのパス）
  */
 final class Trace
 {
-    public const FRAMES = 20;
+    public const FRAMES = 10;
+
+    private readonly Names $names;
 
     public function __construct(private readonly Source $source)
     {
+        $this->names = new Names($source);
     }
 
     public function of(Throwable $e): string
@@ -45,7 +48,7 @@ final class Trace
                 $vendor = 0;
             }
 
-            $call = ($frame['class'] ?? '') . ($frame['type'] ?? '') . $frame['function'] . '()';
+            $call = $this->names->class($frame['class'] ?? '') . ($frame['type'] ?? '') . $this->names->function($frame['function']) . '()';
             $lines[] = "#{$index} " . ($file === null ? $call : "{$file}:" . ($frame['line'] ?? '?') . " {$call}");
             $shown++;
         }

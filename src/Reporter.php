@@ -8,6 +8,10 @@ use Closure;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Log;
@@ -16,35 +20,43 @@ use Throwable;
 /**
  * 記録する例外を Chatwork の部屋に知らせる
  *
- * 送る項目: 例外のクラス・起きた場所・Request ID・リクエスト（バッチはコマンド）・利用者・例外の種類ごとの決まった部分（Details）・
- * 例外に最も近いアプリの行と前後の行（Snippet）・引数の値を含めない道筋（Trace）。
- * 例外の文言・引数の値は送らない。中身はログを Request ID で引いて見る
+ * 知らせは「どんな種類の例外かを知り、ログを引く鍵（Request ID）を渡す」ためのもの。伏せる前の文言・SQL・呼び出しの並びは
+ * Laravel の laravel.log に残る（reportable() から void を返すので、元の記録は止めない）。
+ * 本文に入る値は、項目ごとに Text::field()（文字を直す → 伏せる → 記法を逃がす → 幅で切る）を通す
  */
 final class Reporter
 {
+    private const TITLE_WIDTH = 80;
+
+    private const REQUEST_WIDTH = 300;
+
+    private const ID_WIDTH = 100;
+
+    private const LINE_WIDTH = 500;
+
     /** @var (Closure(): ?string)|null */
     private static ?Closure $userResolver = null;
 
-    /**
-     * キャッシュが使えないとき（DB の障害など）の、このプロセスだけの間引きの印。キーと期限（UNIX 時刻）
-     *
-     * @var array<string, int>
-     */
-    private array $fallbackMarks = [];
+    private readonly Throttle $throttle;
+
+    private readonly JobEntrance $entrance;
 
     public function __construct(
         private readonly Application $app,
         private readonly Config $config,
-        private readonly CacheFactory $cache,
+        CacheFactory $cache,
         private readonly Transport $transport,
         private readonly Source $source,
+        ?JobEntrance $entrance = null,
     ) {
+        $this->throttle = new Throttle($config, $cache);
+        $this->entrance = $entrance ?? new JobEntrance($config);
     }
 
     /**
      * 本文の「利用者」に出す文字を返す関数。null で既定（既定のガードで照合済みの利用者の ID）に戻す
      *
-     * 照合が済んでいない利用者を取りにいかない（知らせるためにトークンやセッションの照合を走らせない）
+     * 照合が済んでいない利用者を取りにいかない（知らせるためにトークンやセッションの照合を走らせない）。内部の ID だけを返す
      *
      * @param (Closure(): ?string)|null $resolver
      */
@@ -60,8 +72,8 @@ final class Reporter
     {
         // Laravel の起動の途中の例外では、設定やファサードがまだ使えない
         try {
-            $token = $this->string('access_token');
-            $room = $this->string('room_id');
+            $token = Settings::string($this->config, 'access_token');
+            $room = Settings::string($this->config, 'room_id');
             $send = $token !== '' && $room !== '' && $this->environmentAllows();
         } catch (Throwable) {
             return;
@@ -76,11 +88,8 @@ final class Reporter
                 return;
             }
 
-            if (! $this->acquire($this->throttleKey($e), $this->throttleSeconds())) {
-                return;
-            }
-
-            $this->transport->send($token, $room, $this->body($e));
+            $seconds = Settings::positive($this->config, 'throttle_seconds', 60);
+            $this->deliver($token, $room, $this->throttleKey($e), $seconds, fn (?string $repeat): string => $this->compose($e, $repeat), '同じ例外');
         } catch (Throwable $sendError) {
             try {
                 Log::warning('例外を Chatwork に送れなかった', ['exception' => $e::class, 'error' => $sendError::class]);
@@ -93,25 +102,24 @@ final class Reporter
     /**
      * 例外ではない知らせ（不自然に多いログインの失敗など）を、例外と同じ部屋に送る。同じ $throttleKey は notice_throttle_seconds に 1 回だけ
      *
-     * 送る条件（送り先・環境）は report() と同じ。送れなくても投げない
+     * 送る条件（送り先・環境）は report() と同じ。送れなくても投げない。行と $code は伏せて逃がすが、
+     * 形の無い個人情報（氏名など）は伏せられないので入れない
      *
-     * @param list<string> $lines 本文の行。値をそのまま送るので、個人情報・秘密を入れない
+     * @param list<string> $lines 本文の行
+     * @param ?string $code [code] の枠に入れる中身
      */
-    public function notice(string $title, array $lines, string $throttleKey): void
+    public function notice(string $title, array $lines, string $throttleKey, ?string $code = null): void
     {
         try {
-            $token = $this->string('access_token');
-            $room = $this->string('room_id');
+            $token = Settings::string($this->config, 'access_token');
+            $room = Settings::string($this->config, 'room_id');
             if ($token === '' || $room === '' || ! $this->environmentAllows()) {
                 return;
             }
 
-            $seconds = $this->config->get('rich-chatwork.notice_throttle_seconds');
-            if (! $this->acquire('rich-chatwork-notice:' . sha1($throttleKey), is_int($seconds) && $seconds > 0 ? $seconds : 3600)) {
-                return;
-            }
-
-            $this->transport->send($token, $room, '[info][title]' . $this->expand('notice_title', '{app}（{env}）') . $title . '[/title]' . implode("\n", $lines) . '[/info]');
+            $seconds = Settings::positive($this->config, 'notice_throttle_seconds', 3600);
+            $compose = fn (?string $repeat): string => $this->composeNotice($title, $lines, $code, $repeat);
+            $this->deliver($token, $room, 'rich-chatwork-notice:' . sha1($throttleKey), $seconds, $compose, '同じ知らせ');
         } catch (Throwable $sendError) {
             try {
                 Log::warning('知らせを Chatwork に送れなかった', ['title' => $title, 'error' => $sendError::class]);
@@ -121,44 +129,311 @@ final class Reporter
         }
     }
 
+    /**
+     * 例外の知らせの本文（間引いた回数の行を除く）
+     */
     public function body(Throwable $e): string
     {
-        $lines = [
-            '例外: ' . $e::class,
-            '場所: ' . $this->source->relative($e->getFile()) . ':' . $e->getLine(),
-            'Request ID: ' . ($this->context('request_id') ?? '（無し）'),
-            ...$this->origin(),
-            '利用者: ' . ($this->user() ?? '（未ログイン）'),
-            ...Details::lines($e),
-            ...$this->message($e),
-        ];
-
-        $snippet = new Snippet($this->source)->of($e);
-
-        return '[info][title]' . $this->title() . '[/title]' . implode("\n", $lines)
-            . ($snippet === null ? '' : "\n[code]{$snippet}[/code]")
-            . "\n[code]" . new Trace($this->source)->of($e) . '[/code][/info]';
+        return $this->compose($e, null);
     }
 
     /**
-     * 設定 send_message が true のときだけ、例外の文言をそのまま（長さだけ切って）添える
+     * 間引きのキー。主に見る例外の「アプリの行（無ければ投げた場所）＋クラス＋SQLSTATE」。DB の接続断はアプリの行を外す
+     */
+    public function throttleKey(Throwable $e): string
+    {
+        $chain = Chain::of($e, $this->wrappers());
+        $main = $chain->main;
+        [$state, $driver] = $main instanceof QueryException ? Details::sqlState($main) : [null, null];
+        $disconnected = $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, [2002, 1045], true)));
+
+        $line = $this->source->appLine($main, null);
+        $where = match (true) {
+            $disconnected => '',
+            $line->file !== null => $this->source->relative($line->file) . ':' . $line->line,
+            default => $this->source->relative($main->getFile()) . ':' . $main->getLine(),
+        };
+
+        return 'rich-chatwork:' . sha1($where . '|' . $main::class . '|' . ($state ?? ''));
+    }
+
+    /**
+     * @param Closure(?string): string $compose 間引いた回数の行を受けて本文を作る
+     */
+    private function deliver(string $token, string $room, string $key, int $seconds, Closure $compose, string $label): void
+    {
+        $state = $this->throttle->attempt($key, $seconds);
+        if ($state === null) {
+            return;
+        }
+
+        try {
+            $this->transport->send($token, $room, $compose($this->repeatLine($label, $state, $seconds)));
+        } catch (Throwable $sendError) {
+            $this->throttle->restore($key, $state['count'] ?? 0);
+
+            throw $sendError;
+        }
+
+        $this->throttle->sent($key);
+    }
+
+    private function compose(Throwable $e, ?string $repeat): string
+    {
+        $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
+        $chain = Chain::of($e, $this->wrappers());
+        $main = $chain->main;
+        $names = new Names($this->source);
+        $kind = Details::of($main);
+        $view = $chain->view($this->source);
+        $appLine = $this->source->appLine($main, $view);
+        $body = new Body();
+
+        $assembled = KnownMessage::of($main);
+        $message = $this->message($main, $assembled, $redactor);
+        if ($message !== null) {
+            $body->code($message);
+        }
+
+        $kindLine = $this->kindLine($kind, $assembled !== null && $assembled !== KnownMessage::FAILED ? $assembled : null);
+        if ($kindLine !== null) {
+            $body->text($kindLine);
+        }
+
+        if ($chain->wrappers !== []) {
+            $wrapped = implode('・', array_unique(array_map(static fn (Throwable $w): string => $names->short($w::class), $chain->wrappers)));
+            $body->text(Text::field('包んだもの: ' . $wrapped . ($view === null ? '' : "（ビュー {$view}）"), false, null, self::LINE_WIDTH));
+        }
+        foreach ($chain->causes as $cause) {
+            $body->text(Text::field('原因: ' . $names->class($cause::class) . '（' . $this->source->relative($cause->getFile()) . ':' . $cause->getLine() . '）', false, null, self::LINE_WIDTH));
+        }
+
+        $body->text(Text::field('アプリの行: ' . $appLine->text, false, null, self::LINE_WIDTH));
+        $snippet = $appLine->file !== null && $appLine->line !== null && $this->snippetAllowed($appLine->file)
+            ? new Snippet($this->source, $redactor)->at($appLine->file, $appLine->line)
+            : null;
+        if ($snippet !== null) {
+            $body->code($snippet, 'snippet');
+        }
+
+        foreach ($this->entrance($e, $main, $redactor) as $line) {
+            $body->text($line);
+        }
+        if ($repeat !== null) {
+            $body->text($repeat);
+        }
+
+        $trace = Text::scrub(new Trace($this->source)->of($main), true);
+        if ($trace === null || $trace === '') {
+            $body->text('呼び出しの並び: 取れない');
+        } else {
+            $body->hr('trace')->code(Text::escape($trace, true), 'trace');
+        }
+
+        $title = $this->title($names->short($main::class), $kind->summary);
+        $text = $body->render($title);
+
+        // 文字列の途中では切らず、塊で落とす（呼び出しの並び → 前後のコード）
+        if (mb_strlen($text) > Body::MAX_LENGTH) {
+            $text = $body->drop('trace', '呼び出しの並び: 長いので省いた（ログを見る）')->render($title);
+        }
+        if (mb_strlen($text) > Body::MAX_LENGTH) {
+            $text = $body->drop('snippet')->render($title);
+        }
+
+        return $text;
+    }
+
+    /**
+     * 形の分かる例外は設定に関係なく組み立てた文言。それ以外は send_message のときだけ、元の文言を伏せて送る
+     */
+    private function message(Throwable $main, ?string $assembled, Redactor $redactor): ?string
+    {
+        $width = Settings::positive($this->config, 'message_max_length', 500);
+
+        if ($assembled !== null) {
+            return Text::field($assembled, true, null, $width);
+        }
+        if ($this->config->get('rich-chatwork.send_message') !== true || $main->getMessage() === '') {
+            return null;
+        }
+
+        return Text::field($main->getMessage(), true, fn (string $text): ?string => $redactor->message($this->source->relativeIn($text)), $width);
+    }
+
+    /**
+     * 件名と組み立てた文言に入らなかった項目。無ければ行を出さない
+     */
+    private function kindLine(Kind $kind, ?string $assembled): ?string
+    {
+        $items = array_filter($kind->items, static fn (array $item): bool => ! $item['inSummary']
+            && ($assembled === null || preg_match('/(?<![A-Za-z0-9_])' . preg_quote($item['value'], '/') . '(?![A-Za-z0-9_])/u', $assembled) !== 1));
+        if ($items === []) {
+            return null;
+        }
+
+        $text = implode(' ／ ', array_map(static fn (array $item): string => "{$item['label']}: {$item['value']}", $items));
+
+        return Text::field("種類: {$text}", false, null, self::LINE_WIDTH);
+    }
+
+    /**
+     * 入口の行（ジョブ → コマンド → HTTP の順に、最初に当たった 1 つ）と Request ID の行
      *
      * @return list<string>
      */
-    private function message(Throwable $e): array
+    private function entrance(Throwable $e, Throwable $main, Redactor $redactor): array
     {
-        if ($this->config->get('rich-chatwork.send_message') !== true || $e->getMessage() === '') {
-            return [];
+        $job = $this->entrance->of($e, $main);
+        $command = $this->context('command');
+        $requestId = $job['id'] ?? $this->context('request_id');
+        $lines = [];
+
+        if ($job !== null) {
+            $lines[] = Text::field('ジョブ: ' . $job['label'], false, null, self::LINE_WIDTH);
+        } elseif ($command !== null) {
+            $name = preg_split('/\s+/', trim($command))[0] ?? '';
+            $lines[] = 'コマンド: ' . Text::field($name, false, null, self::ID_WIDTH);
+        } elseif (! $this->app->runningInConsole()) {
+            $user = $this->user();
+            $lines[] = 'リクエスト: ' . Text::field($this->route(), false, $redactor->request(...), self::REQUEST_WIDTH)
+                . ' ／ 利用者: ' . ($user === null ? '未ログイン' : Text::field($user, false, null, self::ID_WIDTH));
+        } elseif (($request = $this->context('request')) !== null) {
+            // ルートを持たない入口で、使う側が Context に明示した物
+            $lines[] = 'リクエスト: ' . Text::field($request, false, $redactor->request(...), self::REQUEST_WIDTH);
         }
 
-        $max = $this->config->get('rich-chatwork.message_max_length');
+        $lines[] = $requestId === null
+            ? 'Request ID: （無し）'
+            : 'Request ID: ' . Text::field($requestId, false, null, self::ID_WIDTH) . '（中身はログをこの番号で引く）';
+        if ($job !== null && $job['origin'] !== null) {
+            $lines[] = '発端の Request ID: ' . Text::field($job['origin'], false, null, self::ID_WIDTH);
+        }
 
-        return ['文言: ' . mb_strimwidth($e->getMessage(), 0, is_int($max) && $max > 0 ? $max : 1000, '…')];
+        return $lines;
     }
 
-    public function throttleKey(Throwable $e): string
+    /**
+     * ルートのテンプレート（値の入らない形）。ルートが決まる前の例外では、生のパスに戻さずメソッドだけ
+     */
+    private function route(): string
     {
-        return 'rich-chatwork:' . sha1($e::class . '@' . $e->getFile() . ':' . $e->getLine());
+        $request = $this->app->bound('request') ? $this->app->make('request') : null;
+        if (! $request instanceof Request) {
+            return '（ルート未確定）';
+        }
+
+        $route = $request->route();
+
+        return $route instanceof Route
+            ? $request->getMethod() . ' /' . ltrim($route->uri(), '/')
+            : $request->getMethod() . '（ルート未確定）';
+    }
+
+    /**
+     * 「同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 12 回」。数えていない（予備の動き）・0 回なら出さない
+     *
+     * @param array{count: ?int, last: ?int} $state
+     */
+    private function repeatLine(string $label, array $state, int $seconds): ?string
+    {
+        if ($state['count'] === null || $state['count'] === 0) {
+            return null;
+        }
+
+        $when = '前の知らせ';
+        if ($state['last'] !== null) {
+            $last = Carbon::createFromTimestamp($state['last'], date_default_timezone_get());
+            $when .= '（' . $last->format($last->isSameDay(Carbon::now()) ? 'H:i' : 'n/j H:i') . '）';
+        }
+
+        return "{$label}: {$when}の後の " . self::duration($seconds) . "に、送らずに {$state['count']} 回";
+    }
+
+    private static function duration(int $seconds): string
+    {
+        return match (true) {
+            $seconds <= 60 => "{$seconds} 秒",
+            $seconds % 3600 === 0 => ($seconds / 3600) . ' 時間',
+            $seconds % 60 === 0 => ($seconds / 60) . ' 分',
+            default => intdiv($seconds, 60) . ' 分 ' . ($seconds % 60) . ' 秒',
+        };
+    }
+
+    /**
+     * @param list<string> $lines
+     */
+    private function composeNotice(string $title, array $lines, ?string $code, ?string $repeat): string
+    {
+        $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
+        $heading = Text::cut(Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ', false, null, self::TITLE_WIDTH) . Text::field($title, false, null, self::TITLE_WIDTH), self::TITLE_WIDTH);
+        $rows = array_map(static fn (string $line): string => Text::field($line, false, $redactor->message(...), self::LINE_WIDTH), $lines);
+        $block = $code === null ? null : implode("\n", array_map(
+            static fn (string $line): string => Text::field($line, true, $redactor->message(...), self::LINE_WIDTH),
+            explode("\n", str_replace(["\r\n", "\r"], "\n", $code)),
+        ));
+
+        $text = self::noticeBody($rows, null, $block, $repeat)->render($heading);
+        for ($keep = count($rows); mb_strlen($text) > Body::MAX_LENGTH && $keep > 0;) {
+            $keep--;
+            $text = self::noticeBody(array_slice($rows, 0, $keep), '（以下 ' . (count($rows) - $keep) . ' 行は省いた）', $block, $repeat)->render($heading);
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param list<string> $rows
+     */
+    private static function noticeBody(array $rows, ?string $omitted, ?string $block, ?string $repeat): Body
+    {
+        $body = new Body();
+        foreach ($rows as $row) {
+            $body->text($row);
+        }
+        if ($omitted !== null) {
+            $body->text($omitted);
+        }
+        if ($block !== null) {
+            $body->code($block);
+        }
+        if ($repeat !== null) {
+            $body->text($repeat);
+        }
+
+        return $body;
+    }
+
+    private function title(string $class, ?string $summary): string
+    {
+        $head = Text::field($this->expand('title', '{app}（{env}）') . $class, false, null, self::TITLE_WIDTH);
+        if ($summary === null) {
+            return $head;
+        }
+
+        // 切るのは要約の後ろから
+        $room = self::TITLE_WIDTH - mb_strwidth($head . ': ');
+        if ($room < 2) {
+            return $head;
+        }
+
+        return $head . ': ' . Text::field($summary, false, null, $room);
+    }
+
+    private function snippetAllowed(string $file): bool
+    {
+        $relative = $this->source->relative($file);
+        $paths = Settings::strings($this->config, 'snippet_paths', ['app/', 'routes/']);
+
+        return array_any($paths, static fn (string $path): bool => $path !== '' && str_starts_with($relative, rtrim($path, '/') . '/'));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function wrappers(): array
+    {
+        return Settings::strings($this->config, 'wrapper_exceptions', ['Illuminate\View\ViewException']);
     }
 
     private function environmentAllows(): bool
@@ -174,38 +449,6 @@ final class Reporter
         return ! is_array($only) || in_array($environment, $only, true);
     }
 
-    private function throttleSeconds(): int
-    {
-        $seconds = $this->config->get('rich-chatwork.throttle_seconds');
-
-        return is_int($seconds) && $seconds > 0 ? $seconds : 60;
-    }
-
-    /**
-     * 間引きの印を置けたら true。キャッシュが使えないときは、このプロセスの中だけで間引く
-     */
-    private function acquire(string $key, int $seconds): bool
-    {
-        $store = $this->config->get('rich-chatwork.cache_store');
-
-        try {
-            return $this->cache->store(is_string($store) ? $store : null)->add($key, true, $seconds);
-        } catch (Throwable) {
-            $now = time();
-            if (($this->fallbackMarks[$key] ?? 0) > $now) {
-                return false;
-            }
-            $this->fallbackMarks[$key] = $now + $seconds;
-
-            return true;
-        }
-    }
-
-    private function title(): string
-    {
-        return $this->expand('title', '{app}（{env}）にて例外発生');
-    }
-
     /**
      * 設定の文字の {app}・{env} を、app.name と APP_ENV に置き換える
      */
@@ -219,21 +462,6 @@ final class Reporter
             [is_string($app) ? $app : '', $this->app->environment()],
             is_string($template) ? $template : $default,
         );
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function origin(): array
-    {
-        $command = $this->context('command');
-        if ($command !== null) {
-            return ["コマンド: {$command}"];
-        }
-
-        $request = $this->context('request');
-
-        return $request === null ? [] : ["リクエスト: {$request}"];
     }
 
     private function user(): ?string
@@ -259,12 +487,5 @@ final class Reporter
         $value = is_string($key) ? Context::get($key) : null;
 
         return is_string($value) && $value !== '' ? $value : null;
-    }
-
-    private function string(string $key): string
-    {
-        $value = $this->config->get("rich-chatwork.{$key}");
-
-        return is_string($value) ? $value : '';
     }
 }

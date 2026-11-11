@@ -38,7 +38,7 @@ final class ExamplesTest extends TestCase
         $this->useSource($this->fixture->source());
         $this->useEnvironment('production');
         config([
-            'app.name' => 'hitodukuri',
+            'app.name' => 'example-app',
             'rich-chatwork.access_token' => 'probe-token',
             'rich-chatwork.room_id' => '12345',
             'rich-chatwork.snippet_paths' => ['app/', 'routes/'],
@@ -85,7 +85,7 @@ final class ExamplesTest extends TestCase
 
         $this->assertCount(2, $this->transport->sent);
         $this->assertSame(<<<'TEXT'
-            [info][title]hitodukuri（production）QueryException: SQLSTATE 22001・列 name[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
+            [info][title]example-app（production）QueryException: SQLSTATE 22001・列 name[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
             [code]  40 | $param = EmployeeParam::from($request);
               41 |
             > 42 | $employee->update($param->toArray());
@@ -122,7 +122,7 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($outer);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]hitodukuri（production）QueryException: SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: （ログ）)[/code]包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
+            [info][title]example-app（production）QueryException: SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: （ログ）)[/code]包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
             アプリの行: app/Models/Employee.php:120（vendor の Connection.php:NNN で投げた）
             [code]…[/code]リクエスト: GET /employees/{employee} ／ 利用者: 7
             Request ID: …（中身はログをこの番号で引く）
@@ -149,7 +149,7 @@ final class ExamplesTest extends TestCase
 
         $body = $this->onlyBody();
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]hitodukuri（production）TypeError: SyncService::run() 引数 #1 int←null[/title][code]App\Services\Employee\SyncService::run(): Argument #1 ($employeeId) must be of type int, null given, called in app/Jobs/SyncEmployeeJob.php on line 28[/code]種類: 引数の名前: $employeeId
+            [info][title]example-app（production）TypeError: SyncService::run() 引数 #1 int←null[/title][code]App\Services\Employee\SyncService::run(): Argument #1 ($employeeId) must be of type int, null given, called in app/Jobs/SyncEmployeeJob.php on line 28[/code]種類: 引数の名前: $employeeId
             アプリの行: app/Jobs/SyncEmployeeJob.php:28（定義は SyncService.php:15）
             [code]…[/code]ジョブ: SyncEmployeeJob（試行 2 回目）
             Request ID: …（中身はログをこの番号で引く）
@@ -175,7 +175,7 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]hitodukuri（production）RequestException: HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.example/services/{…}/{…}/{…}[/code]アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:NNN で投げた）
+            [info][title]example-app（production）RequestException: HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.example/services/{…}/{…}/{…}[/code]アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:NNN で投げた）
             [code]…[/code]コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
             [hr][code]…[/code][/info]
@@ -195,7 +195,7 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]hitodukuri（production）FatalError: メモリ切れ（上限 512 MB）[/title]アプリの行: 無し（vendor の Collection.php:NNN で投げた）
+            [info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title]アプリの行: 無し（vendor の Collection.php:NNN で投げた）
             コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
             呼び出しの並び: 取れない[/info]
@@ -207,7 +207,7 @@ final class ExamplesTest extends TestCase
     {
         $this->reporter()->notice('ログインの失敗が多い', ['直近 10 分の失敗: 52 回', 'IP やログイン ID は laravel.log を見る'], 'signin:all');
 
-        $this->assertSame("[info][title]hitodukuri（production）知らせ: ログインの失敗が多い[/title]直近 10 分の失敗: 52 回\nIP やログイン ID は laravel.log を見る[/info]", $this->onlyBody());
+        $this->assertSame("[info][title]example-app（production）知らせ: ログインの失敗が多い[/title]直近 10 分の失敗: 52 回\nIP やログイン ID は laravel.log を見る[/info]", $this->onlyBody());
     }
 
     private function reporter(): Reporter
@@ -227,9 +227,8 @@ final class ExamplesTest extends TestCase
      */
     private function assertMatchesExample(string $example, string $body): void
     {
-        $pattern = str_replace(['…', 'NNN'], ["\0any\0", "\0num\0"], $example);
-        $pattern = preg_quote($pattern, '/');
-        $pattern = str_replace(["\0any\0", "\0num\0"], ['.*?', '\d+'], $pattern);
+        $pattern = preg_quote(str_replace(['…', 'NNN'], ['@@ANY@@', '@@NUM@@'], $example), '/');
+        $pattern = str_replace(['@@ANY@@', '@@NUM@@'], ['.*?', '\d+'], $pattern);
 
         $this->assertMatchesRegularExpression('/\A' . $pattern . '\z/su', $body);
     }

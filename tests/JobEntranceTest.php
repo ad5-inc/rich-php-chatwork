@@ -44,7 +44,9 @@ final class JobEntranceTest extends TestCase
         $worker = $this->app?->make('queue.worker');
         $this->assertInstanceOf(Worker::class, $worker);
         // 本物のワーカーが例外を受けて report() するところ（runJob）を通す
-        (fn (SyncJob $job): mixed => $this->runJob($job, 'sync', new WorkerOptions(maxTries: 1)))->call($worker, $job);
+        (function (SyncJob $job): void {
+            $this->runJob($job, 'sync', new WorkerOptions(maxTries: 1));
+        })->call($worker, $job);
 
         $body = $this->onlyBody();
         $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $body);
@@ -122,7 +124,7 @@ final class JobEntranceTest extends TestCase
     {
         $queue = $this->app?->make('queue')->connection('sync');
         $this->assertInstanceOf(SyncQueue::class, $queue);
-        $payload = (fn (object $command): string => $this->createPayload($command, null, ''))->call($queue, $command);
+        $payload = (fn (object $command): string => $this->createPayload($command, 'default', ''))->call($queue, $command);
 
         return new SyncJob($this->app ?? $this->fail('アプリが無い'), $payload, 'sync', 'default');
     }

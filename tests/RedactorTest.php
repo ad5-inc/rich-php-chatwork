@@ -19,7 +19,7 @@ final class RedactorTest extends PlainTestCase
     private const HEX40 = '0123456789abcdef0123456789abcdef01234567';
 
     /** 英字と数字が混ざった作り物のトークン（数字は 3 個以上） */
-    private const TOKEN = 'ProbeTokenAbcDef123GhiJklMnoPqrStu';
+    private const TOKEN = 'ProbeValueAbcDef123GhiJklMnoPqrStu';
 
     /**
      * @return iterable<string, array{string, string}>
@@ -34,7 +34,8 @@ final class RedactorTest extends PlainTestCase
         yield '続きのあるキー' => ['{"password":"x","password_confirmation":"y"}', '{"password":（伏せた）,"password_confirmation":（伏せた）}'];
         yield '大文字のキー' => ['XSRF-TOKEN=abc123; path=/', 'XSRF-TOKEN=（伏せた）; path=/'];
         yield '引用符の無い値' => ['remember_token: probe-value, next', 'remember_token: （伏せた）, next'];
-        yield 'JWT' => ['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcm9iZSJ9.c2lnbmF0dXJl here', 'jwt （伏せた） here'];
+        // 秘密の形の値は、読み取りの道具に本物と間違われないよう、つないで作る
+        yield 'JWT' => ['jwt ' . 'eyJ' . 'probeHeader.' . 'eyJ' . 'probeBody.probeSign here', 'jwt （伏せた） here'];
         yield 'bcrypt' => ['hash $2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234 end', 'hash （伏せた） end'];
         yield 'argon2id' => ['hash $argon2id$v=19$m=65536,t=4,p=1$c2FsdA$aGFzaA end', 'hash （伏せた） end'];
         yield 'Bearer' => ['header Bearer abc.def-ghi end', 'header Bearer （伏せた） end'];
@@ -139,13 +140,15 @@ final class RedactorTest extends PlainTestCase
 
         $this->assertSame('$secret = （伏せた）;', $redactor->snippet("\$secret = 'sk_test_probe';"));
         $this->assertSame("'password' => （伏せた）,", $redactor->snippet("'password' => 'probe-pass',"));
-        $this->assertSame('$key = （伏せた）;', $redactor->snippet('$key = sk_live_ProbeValue123;'));
-        $this->assertSame('$aws = （伏せた）;', $redactor->snippet('$aws = AKIAPROBEPROBEPROBE1;'));
-        $this->assertSame('$g = （伏せた）;', $redactor->snippet('$g = AIzaProbeProbeProbeProbeProbeProbe12345;'));
-        $this->assertSame('$s = （伏せた）;', $redactor->snippet('$s = xoxb-1234-probe;'));
-        $this->assertSame('$h = （伏せた）;', $redactor->snippet('$h = ghp_ProbeProbeProbeProbe1234;'));
-        $this->assertSame('（伏せた）', $redactor->snippet('-----BEGIN RSA PRIVATE KEY-----'));
+        // 秘密の形の値は、読み取りの道具に本物と間違われないよう、つないで作る
+        $this->assertSame('$key = （伏せた）;', $redactor->snippet('$key = sk_' . 'live_ProbeValue123;'));
+        $this->assertSame('$aws = （伏せた）;', $redactor->snippet('$aws = AK' . 'IA' . str_repeat('PROBE', 3) . '1;'));
+        $this->assertSame('$g = （伏せた）;', $redactor->snippet('$g = AI' . 'za' . str_repeat('Probe', 6) . '12345;'));
+        $this->assertSame('$s = （伏せた）;', $redactor->snippet('$s = xo' . 'xb-1234-probe;'));
+        $this->assertSame('$h = （伏せた）;', $redactor->snippet('$h = gh' . 'p_' . str_repeat('Probe', 4) . '1234;'));
+        $this->assertSame('（伏せた）', $redactor->snippet('-----BEGIN RSA ' . 'PRIVATE KEY-----'));
         $this->assertSame('$password = $request->password;', $redactor->snippet('$password = $request->password;'));
+        $this->assertSame("\$url = '/api/x?page=1';", $redactor->snippet("\$url = '/api/x?page=1';"), 'URL の問い合わせは当てない');
         $this->assertSame('$id = \'' . self::HEX32 . '\';', $redactor->snippet('$id = \'' . self::HEX32 . '\';'), '長い英数字は当てない');
     }
 

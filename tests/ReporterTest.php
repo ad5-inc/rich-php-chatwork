@@ -86,9 +86,10 @@ final class ReporterTest extends TestCase
     #[Test]
     public function 設定で選べば文言を伏せて件名の直下に添え_長い文言は表示幅で切る(): void
     {
-        config(['rich-chatwork.send_message' => true, 'rich-chatwork.message_max_length' => 20]);
-
+        config(['rich-chatwork.send_message' => true]);
         $short = $this->reporter()->body($this->failWithMessage('鍵 password=probe が無い'));
+
+        config(['rich-chatwork.message_max_length' => 20]);
         $long = $this->reporter()->body($this->failWithMessage(str_repeat('あ', 30)));
 
         $this->assertStringContainsString('[/title][code]鍵 password=（伏せた） が無い[/code]アプリの行: ', $short);
@@ -154,7 +155,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($top);
 
-        $this->assertSame(3, preg_match_all('/^原因: LogicException（' . preg_quote($this->relative(__FILE__), '/') . ':\d+）$/m', $body));
+        $this->assertSame(3, preg_match_all('/(?:^|\])原因: LogicException（' . preg_quote($this->relative(__FILE__), '/') . ':\d+）$/m', $body));
         $this->assertStringNotContainsString('taro', $body);
     }
 
@@ -359,7 +360,7 @@ final class ReporterTest extends TestCase
         $this->reporter()->notice('ログインの失敗が多い', ['同じ ID で 22 回'], 'signin:probe');
 
         $this->assertCount(3, $this->transport->sent);
-        $this->assertStringEndsWith("同じ ID で 22 回\n同じ知らせ:前の知らせ（10:00）の後の 1 時間に、送らずに 1 回[/info]", $this->transport->sent[2]['body']);
+        $this->assertStringEndsWith("同じ ID で 22 回\n同じ知らせ: 前の知らせ（10:00）の後の 1 時間に、送らずに 1 回[/info]", $this->transport->sent[2]['body']);
     }
 
     #[Test]
