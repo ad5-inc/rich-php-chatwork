@@ -14,7 +14,7 @@ final class FakeTransport implements Transport
 
     public bool $fail = false;
 
-    public function send(string $token, string $room, string $body): void
+    public function send(#[\SensitiveParameter] string $token, string $room, #[\SensitiveParameter] string $body): void
     {
         if ($this->fail) {
             throw new RuntimeException('Chatwork is down');

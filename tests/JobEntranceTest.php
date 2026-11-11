@@ -7,11 +7,15 @@ namespace Ad5\RichPhpChatwork\Tests;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Tests\Jobs\FailingJob;
 use Ad5\RichPhpChatwork\Tests\Jobs\OuterJob;
-use Illuminate\Queue\Jobs\SyncJob;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Queue\SyncQueue;
 use Illuminate\Queue\Worker;
 use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Facades\Context;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
@@ -35,24 +39,42 @@ final class JobEntranceTest extends TestCase
     }
 
     #[Test]
-    public function ワーカーで失敗したら_通知にジョブの行がある(): void
+    public function ワーカーで失敗したら_通知にジョブの行があり_ログと同じRequestIDを出す(): void
     {
         Context::add('request_id', 'req-dispatch');
-        $job = $this->syncJob(new FailingJob());
+        $job = $this->workerJob(new FailingJob());
         Context::flush();
+        $logged = $this->requestIdWhenReported();
 
-        $worker = $this->app?->make('queue.worker');
-        $this->assertInstanceOf(Worker::class, $worker);
-        // 本物のワーカーが例外を受けて report() するところ（runJob）を通す
-        (function (SyncJob $job): void {
-            $this->runJob($job, 'sync', new WorkerOptions(maxTries: 1));
-        })->call($worker, $job);
+        $this->runOnWorker($job);
 
         $body = $this->onlyBody();
         $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $body);
-        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . '（中身はログをこの番号で引く）', $body);
         $this->assertStringContainsString("発端の Request ID: req-dispatch\n", $body);
         $this->assertNotSame('req-dispatch', FailingJob::$seenRequestId, 'ジョブの中では新しい Request ID');
+        $this->assertSame([FailingJob::$seenRequestId], $logged->ids, 'Laravel が例外を記録するときの Context の Request ID');
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . '（中身はログをこの番号で引く）', $body);
+
+        Event::dispatch(new Looping('redis', 'default'));
+        $this->assertSame('req-dispatch', Context::get('request_id'), 'ワーカーが次のジョブへ回るときに戻す');
+    }
+
+    #[Test]
+    public function 出した側のIDが無いジョブでも_ログと通知のRequestIDが一致する(): void
+    {
+        $job = $this->workerJob(new FailingJob());
+        $logged = $this->requestIdWhenReported();
+
+        $this->runOnWorker($job);
+
+        $body = $this->onlyBody();
+        $this->assertNotNull(FailingJob::$seenRequestId);
+        $this->assertSame([FailingJob::$seenRequestId], $logged->ids);
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . '（中身はログをこの番号で引く）', $body);
+        $this->assertStringNotContainsString('発端の Request ID', $body);
+
+        Event::dispatch(new Looping('redis', 'default'));
+        $this->assertFalse(Context::has('request_id'), '元に無かったキーは消す');
     }
 
     #[Test]
@@ -110,6 +132,32 @@ final class JobEntranceTest extends TestCase
         $this->assertSame('req-top', Context::get('request_id'), '外側のジョブの分も戻り、2 回戻らない');
     }
 
+    private function runOnWorker(WorkerJob $job): void
+    {
+        $worker = $this->app?->make('queue.worker');
+        $this->assertInstanceOf(Worker::class, $worker);
+        // 本物のワーカーが例外を受けて report() するところ（runJob）を通す
+        (function (WorkerJob $job): void {
+            $this->runJob($job, 'redis', new WorkerOptions(maxTries: 1));
+        })->call($worker, $job);
+    }
+
+    /**
+     * Laravel が例外を記録する時点（ContextLogProcessor が Context を付ける時点）の Request ID を残す
+     */
+    private function requestIdWhenReported(): RequestIds
+    {
+        $ids = new RequestIds();
+        $handler = $this->app?->make(ExceptionHandler::class);
+        $this->assertInstanceOf(Handler::class, $handler);
+        $handler->reportable(static function (\Throwable $e) use ($ids): void {
+            $id = Context::get('request_id');
+            $ids->ids[] = is_string($id) ? $id : null;
+        });
+
+        return $ids;
+    }
+
     private function onlyBody(): string
     {
         $this->assertCount(1, $this->transport->sent);
@@ -118,14 +166,16 @@ final class JobEntranceTest extends TestCase
     }
 
     /**
-     * sync のキューが作るのと同じ形のジョブ
+     * キューに積んだときと同じ形のジョブ（payload は sync のキューで作る。作り方は同じ）
      */
-    private function syncJob(object $command): SyncJob
+    private function workerJob(object $command): WorkerJob
     {
         $queue = $this->app?->make('queue')->connection('sync');
         $this->assertInstanceOf(SyncQueue::class, $queue);
         $payload = (fn (object $command): string => $this->createPayload($command, 'default', ''))->call($queue, $command);
+        $app = $this->app;
+        $this->assertInstanceOf(Container::class, $app);
 
-        return new SyncJob($this->app ?? $this->fail('アプリが無い'), $payload, 'sync', 'default');
+        return new WorkerJob($app, $payload);
     }
 }

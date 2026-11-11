@@ -14,6 +14,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Event;
@@ -157,7 +158,9 @@ final class ExamplesTest extends TestCase
             [hr][code]…[/code][/info]
             TEXT, $body);
         $this->assertStringNotContainsString('Request ID: req-origin（', $body, 'ジョブの Request ID は新しく付けた物');
-        $this->assertSame('req-origin', Context::get('request_id'), '失敗のイベントで元に戻す');
+        $this->assertNotSame('req-origin', Context::get('request_id'), 'report() が済むまでは戻さない（ログの Request ID と揃える）');
+        Event::dispatch(new Looping('redis', 'default'));
+        $this->assertSame('req-origin', Context::get('request_id'), 'ワーカーが次へ回るときに戻す');
     }
 
     #[Test]

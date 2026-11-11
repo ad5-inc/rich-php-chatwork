@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Ad5\RichPhpChatwork\Tests;
 
 use Ad5\RichPhpChatwork\JobEntrance;
+use Ad5\RichPhpChatwork\PhpChatworkTransport;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Snippet;
 use Ad5\RichPhpChatwork\Trace;
+use Ad5\RichPhpChatwork\Transport;
+use Ad5\RichPhpChatwork\Throttle;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Cache\ArrayStore;
@@ -94,7 +97,7 @@ final class ReporterTest extends TestCase
         config(['rich-chatwork.message_max_length' => 20]);
         $long = $this->reporter()->body($this->failWithMessage(str_repeat('あ', 30)));
 
-        $this->assertStringContainsString('[/title][code]鍵 password=（伏せた） が無い[/code]アプリの行: ', $short);
+        $this->assertStringContainsString('[/title][code]鍵 password=（伏せた）[/code]アプリの行: ', $short);
         $this->assertStringContainsString('[code]' . str_repeat('あ', 9) . '…[/code]', $long, '全角は幅 2');
     }
 
@@ -242,18 +245,19 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
-    public function キャッシュが使えなくても送り_このプロセスの中で間引き_回数の行は出さない(): void
+    public function キャッシュが使えなくても送り_一時フォルダの印でプロセスをまたいで間引く(): void
     {
         $this->breakCache();
         $e = new RuntimeException('probe');
 
         $this->reporter()->report($e);
-        $this->reporter()->report($e);
+        $this->otherProcess()->report($e);
         $this->travel(61)->seconds();
-        $this->reporter()->report($e);
+        $this->otherProcess()->report($e);
 
         $this->assertCount(2, $this->transport->sent);
-        $this->assertStringNotContainsString('同じ例外', $this->transport->sent[1]['body']);
+        $this->assertStringContainsString('同じ例外: 前の知らせ（', $this->transport->sent[1]['body']);
+        $this->assertStringContainsString('送らずに 1 回', $this->transport->sent[1]['body']);
     }
 
     #[Test]
@@ -557,7 +561,7 @@ final class ReporterTest extends TestCase
         $this->reporter()->report($this->distinct(10));
 
         $this->assertCount(3, $this->transport->sent);
-        $this->assertStringContainsString("ほかの例外: 8 件（DomainException 3・LogicException 2・RuntimeException 1、上限で送らなかった。ログを見る）\n", $this->transport->sent[2]['body']);
+        $this->assertStringContainsString("ほかの知らせ・例外: 10:00 から 8 件（DomainException 3・LogicException 2・RuntimeException 1、上限で送らなかった。ログを見る）\n", $this->transport->sent[2]['body']);
     }
 
     #[Test]
@@ -576,6 +580,141 @@ final class ReporterTest extends TestCase
         $quiet = $this->listenLog();
         $this->reporter()->report(new RuntimeException('probe'));
         $this->assertSame([], array_filter($quiet->messages, static fn (string $message): bool => str_starts_with($message, 'Chatwork の送り先が空')), '送らない環境では書かない');
+    }
+
+    #[Test]
+    public function 上限で落ちたのが送る例外と同じなら_ほかではなく同じ例外の回数に入れる(): void
+    {
+        config(['rich-chatwork.max_per_minute' => 1]);
+        $this->travelTo(new \DateTimeImmutable('2026-11-10 23:59:00'));
+        $this->reporter()->report($this->distinct(1));
+        $this->reporter()->report($this->distinct(2));
+        $this->reporter()->report($this->distinctLogic(3));
+
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 00:00:10'));
+        $this->reporter()->report($this->distinct(2));
+
+        $body = $this->transport->sent[1]['body'];
+        $this->assertStringContainsString("同じ例外: 前の知らせの後の 60 秒に、送らずに 1 回\n", $body);
+        $this->assertStringContainsString('ほかの例外: 11/10 23:59 から 1 件（LogicException 1、', $body);
+    }
+
+    #[Test]
+    public function 例外の知らせを作る所が投げても_元の例外はLaravelが記録し_送れなかったと書く(): void
+    {
+        $this->app?->bind(Transport::class, static fn (): Transport => throw new LogicException('transport is broken'));
+        $this->app?->forgetInstance(Reporter::class);
+        $logged = $this->listenLog();
+
+        report(new RuntimeException('probe-original'));
+
+        $this->assertContains('probe-original', $logged->messages, 'Laravel の元の記録が止まらない');
+        $index = array_search('例外を Chatwork に送れなかった', $logged->messages, true);
+        $this->assertIsInt($index);
+        $this->assertInstanceOf(\Throwable::class, $logged->contexts[$index]['exception'] ?? null);
+        $this->assertSame(RuntimeException::class, $logged->contexts[$index]['original'] ?? null);
+    }
+
+    #[Test]
+    public function 設定を読めなくても_送れなかったと書く(): void
+    {
+        $logged = $this->listenLog();
+
+        $this->reporterWithBrokenConfig('rich-chatwork.access_token')->report(new RuntimeException('probe'));
+        $this->reporterWithBrokenConfig('rich-chatwork.access_token')->notice('probe', ['probe'], 'a');
+
+        $this->assertContains('例外を Chatwork に送れなかった', $logged->messages);
+        $this->assertContains('知らせを Chatwork に送れなかった', $logged->messages);
+    }
+
+    #[Test]
+    public function 最小の知らせにも_間引いた回数を付ける(): void
+    {
+        $reporter = $this->reporterWithBrokenConfig('rich-chatwork.wrapper_exceptions');
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:00:00'));
+        $e = new RuntimeException('probe');
+        $reporter->report($e);
+        $reporter->report($e);
+        $this->travelTo(new \DateTimeImmutable('2026-11-11 10:01:01'));
+        $reporter->report($e);
+
+        $this->assertSame('[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）' . "\n" . '同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 1 回[/info]', $this->transport->sent[1]['body']);
+    }
+
+    #[Test]
+    public function 例外ではない知らせの枠が長ければ_枠の末尾の行を落とす(): void
+    {
+        $code = implode("\n", array_fill(0, 5000, str_repeat('x', 28)));
+
+        $this->reporter()->notice('多い', ['1 行'], 'long-code', $code);
+
+        $body = $this->transport->sent[0]['body'];
+        $this->assertLessThanOrEqual(30000, mb_strlen($body));
+        $this->assertMatchesRegularExpression('/\n（以下 \d+ 行は省いた）\[\/code\]\[\/info\]\z/u', $body);
+        $this->assertStringContainsString('[/title]1 行', $body);
+    }
+
+    #[Test]
+    public function 文言が長すぎて落としても超えるなら_文言を詰める(): void
+    {
+        config(['rich-chatwork.send_message' => true, 'rich-chatwork.message_max_length' => 100000]);
+
+        $body = $this->reporter()->body($this->failWithMessage(str_repeat('x', 60000)));
+
+        $this->assertLessThanOrEqual(30000, mb_strlen($body));
+        $this->assertMatchesRegularExpression('/\[code\]x+…\[\/code\]/', $body);
+    }
+
+    #[Test]
+    public function 送る直前に3万文字を超えていたら_最小の知らせに替える(): void
+    {
+        $reporter = $this->reporter();
+        $deliver = (fn (string $token, string $room, string $key, int $seconds, \Closure $compose, \Closure $fallback, string $label, string $name) => $this->deliver($token, $room, $key, $seconds, $compose, $fallback, $label, $name))->bindTo($reporter, Reporter::class);
+        $this->assertInstanceOf(\Closure::class, $deliver);
+
+        $deliver('probe-token', '12345', 'guard', 60, static fn (array $extra): string => str_repeat('a', 30001), static fn (array $extra): string => 'minimal', '同じ例外', 'Probe');
+
+        $this->assertSame('minimal', $this->transport->sent[0]['body']);
+    }
+
+    #[Test]
+    public function トークンと本文は_呼び出しの並びの引数に残さない(): void
+    {
+        $previous = ini_get('zend.exception_ignore_args');
+        ini_set('zend.exception_ignore_args', '0');
+        $this->transport->fail = true;
+        $logged = $this->listenLog();
+        try {
+            $this->reporter()->report(new RuntimeException('probe'));
+        } finally {
+            ini_set('zend.exception_ignore_args', (string) $previous);
+        }
+
+        $index = array_search('例外を Chatwork に送れなかった', $logged->messages, true);
+        $this->assertIsInt($index);
+        $failure = $logged->contexts[$index]['exception'] ?? null;
+        $this->assertInstanceOf(\Throwable::class, $failure);
+        $strings = array_filter(array_merge(...array_map(static fn (array $frame): array => array_values($frame['args'] ?? []), $failure->getTrace())), is_string(...));
+        $this->assertNotContains('probe-token', $strings);
+        $this->assertNotSame([], array_filter(array_merge(...array_map(static fn (array $frame): array => array_values($frame['args'] ?? []), $failure->getTrace())), static fn (mixed $arg): bool => $arg instanceof \SensitiveParameterValue), '引数は残る設定になっている');
+
+        foreach ([[Transport::class, 'send'], [PhpChatworkTransport::class, 'send']] as [$class, $method]) {
+            foreach (['token', 'body'] as $parameter) {
+                $reflection = array_find(new \ReflectionMethod($class, $method)->getParameters(), static fn (\ReflectionParameter $p): bool => $p->getName() === $parameter);
+                $this->assertNotNull($reflection);
+                $this->assertNotSame([], $reflection->getAttributes(\SensitiveParameter::class), "{$class}::{$method}() の \${$parameter}");
+            }
+        }
+    }
+
+    /**
+     * 同じキャッシュとアプリを使う別のプロセス（Reporter をもう 1 つ作る）
+     */
+    private function otherProcess(): Reporter
+    {
+        $app = $this->app ?? $this->fail('アプリが無い');
+
+        return new Reporter($app, config(), $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
     }
 
     /**
@@ -672,6 +811,12 @@ final class ReporterTest extends TestCase
             }
         }));
         config(['cache.stores.broken' => ['driver' => 'broken'], 'rich-chatwork.cache_store' => 'broken']);
+        $this->app?->forgetInstance(Reporter::class);
+        // 予備の一時フォルダは前のテストの印を持ち越さない
+        $directory = Throttle::fallbackDirectory(dirname(__DIR__));
+        if (is_dir($directory)) {
+            new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
+        }
     }
 
     private function failInVendor(): InvalidFormatException

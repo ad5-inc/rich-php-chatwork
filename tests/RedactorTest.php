@@ -52,6 +52,19 @@ final class RedactorTest extends PlainTestCase
         yield 'マイナンバー（区切りなし）' => ['番号 123456789012 を', '番号 （伏せた） を'];
         yield '口座番号' => ['口座番号: 1234567', '口座番号: （伏せた）'];
         yield 'account の後ろの 7 桁' => ['bank account no. 7654321 failed', 'bank account no. （伏せた） failed'];
+        yield '全角の電話番号（NFKC で揃えてから当てる）' => ['電話 ０３－１２３４－５６７８ まで', '電話 （伏せた） まで'];
+        yield '+81 の電話番号' => ['tel +81 90-1234-5678 end', 'tel （伏せた） end'];
+        yield '括弧の電話番号' => ['tel (03)1234-5678 end', 'tel （伏せた） end'];
+        yield '. で区切った電話番号' => ['tel 03.1234.5678 end', 'tel （伏せた） end'];
+        yield '長音で区切った電話番号' => ['tel 090ー1234ー5678 end', 'tel （伏せた） end'];
+        yield '%40 のメールアドレス' => ['to probe.user%40example.test failed', 'to （伏せた） failed'];
+        yield '全角の＠のメールアドレス' => ['to probe.user＠example.test failed', 'to （伏せた） failed'];
+        yield 'Authorization の方式ごと' => ['Authorization: Token probe-value next, rest', 'Authorization: （伏せた）, rest'];
+        yield 'Authorization の Digest' => ['Authorization: Digest username="probe", response="' . self::HEX32 . '"', 'Authorization: （伏せた）, response="（伏せた）"'];
+        yield '全角のコロン' => ['パスワード：probe value', 'パスワード:（伏せた）'];
+        yield '日本語のキー' => ['暗証番号: 9876, トークン=probe-value', '暗証番号: （伏せた）, トークン=（伏せた）'];
+        yield '引用符の無い値は空白で止めない' => ['password=probe value here, next', 'password=（伏せた）, next'];
+        yield '文言の中の鍵の形' => ['key AK' . 'IA' . str_repeat('PROBE', 3) . '1 rejected', 'key （伏せた） rejected'];
     }
 
     #[Test]
@@ -74,6 +87,7 @@ final class RedactorTest extends PlainTestCase
         yield 'パスの区切り' => ['storage/app/' . self::HEX32 . '.pdf'];
         yield 'SQLSTATE・HTTP の状態・行番号' => ['state 22001 HTTP 503 at line 1234 at row 1'];
         yield '7 桁でない口座の後ろ' => ['口座の数 12 件'];
+        yield '0 埋めの社員コード' => ['社員 0012345678 の更新'];
         yield 'URL のパス' => ['https://host.example/x'];
         yield '列とキーの名前' => ["for column 'name' and for key 'employees.code'"];
     }
@@ -127,6 +141,19 @@ final class RedactorTest extends PlainTestCase
         ];
         yield '末尾が切れて SQL の途中まで' => ["{$head} ({$details}, SQL: select * from t where a = 'x", "{$head} (Connection: mysql, SQL: （ログ）)"];
         yield '末尾が切れて Connection も無い' => ["SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'zz' for ke", 'SQLSTATE[23000] （伏せた）'];
+        yield 'Connection の途中で切れた' => ["{$head} (Connection: mysql, Host: db.internal, Port: 33", "{$head} （伏せた）"];
+        yield '写された 1045' => [
+            "SQLSTATE[HY000] [1045] Access denied for user 'probe-user'@'10.0.0.1' (using password: YES) ({$details}, SQL: select 1)",
+            'SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql, SQL: （ログ）)',
+        ];
+        yield '写された 2002' => [
+            "SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for db.internal failed: Name or service not known ({$details}, SQL: select 1)",
+            'SQLSTATE[HY000] [2002] 名前が引けない（詳細はログ） (Connection: mysql, SQL: （ログ）)',
+        ];
+        yield '値に Connection と SQL を含む' => [
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: x' for key 'k' ({$details}, SQL: insert into t values ('v (Connection: a, SQL: x'))",
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: （ログ）)",
+        ];
     }
 
     #[Test]
