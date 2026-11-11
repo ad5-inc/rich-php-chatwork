@@ -110,6 +110,68 @@ final class RedactorTest extends PlainTestCase
         $this->assertSame($text, $this->redactor()->message($text));
     }
 
+    /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function structured(): iterable
+    {
+        $request = \Illuminate\Http\Request::create('/', 'GET', server: ['PHP_AUTH_USER' => 'probe', 'PHP_AUTH_PW' => 'probe-pw-1']);
+        $headers = ['headers' => ['X-Api-Key' => ['k1234567'], 'Cookie' => ['sid=abcd1234']]];
+
+        yield 'Basic 認証の要求の headers' => [(string) json_encode($request->headers->all()), ['probe-pw-1', 'cHJvYmU']];
+        yield 'db_pass と smtp_pass' => [(string) json_encode(['db_pass' => 'probe-db-1', 'smtp_pass' => 'probe-smtp-1', 'passed' => 'kept-1']), ['probe-db-1', 'probe-smtp-1']];
+        yield 'http_build_query' => [http_build_query(['user' => ['email_x' => 'a', 'password' => 'probe-pw-2'], 'api_token' => 'probe-tk-2']), ['probe-pw-2', 'probe-tk-2']];
+        yield 'print_r の配列の値' => [print_r($headers, true), ['k1234567', 'abcd1234']];
+        yield 'var_export の配列の値' => [var_export($headers, true), ['k1234567', 'abcd1234']];
+        yield 'JSON_PRETTY_PRINT の配列の値' => [(string) json_encode($headers, JSON_PRETTY_PRINT), ['k1234567', 'abcd1234']];
+        yield '\\u で書いた日本語のキー' => [(string) json_encode(['パスワード' => 'probe-pw-3']), ['probe-pw-3']];
+        yield 'serialize' => [serialize(['password' => 'probe "x"; pw-4', 'name' => 'a']), ['probe', 'pw-4']];
+        yield '3 重にエンコードした JSON' => [(string) json_encode(json_encode(json_encode(['password' => 'probe-pw-5']))), ['probe-pw-5']];
+    }
+
+    /**
+     * @param list<string> $secrets
+     */
+    #[Test]
+    #[DataProvider('structured')]
+    public function 形のある書き出しの中の値を伏せる(string $text, array $secrets): void
+    {
+        $redacted = (string) $this->redactor()->message($text);
+
+        foreach ($secrets as $secret) {
+            $this->assertStringNotContainsString($secret, $redacted);
+        }
+        $this->assertStringContainsString(Redactor::MARK, $redacted);
+    }
+
+    #[Test]
+    public function 伏せない語は残す(): void
+    {
+        $this->assertStringContainsString('kept-1', (string) $this->redactor()->message((string) json_encode(['passed' => 'kept-1', 'passenger' => 'kept-2'])));
+        $this->assertStringContainsString('"name":"a"', (string) $this->redactor()->message('{"password":"x","name":"a"}'));
+    }
+
+    #[Test]
+    public function http_build_queryの出力そのもの(): void
+    {
+        $this->assertSame(
+            'user%5Bemail_x%5D=a&user%5Bpassword%5D=（伏せた）&api_token=（伏せた）',
+            $this->redactor()->message(http_build_query(['user' => ['email_x' => 'a', 'password' => 'hunter2'], 'api_token' => 'abc'])),
+        );
+    }
+
+    #[Test]
+    public function 配列の値は閉じ括弧まで伏せ_後ろは残す(): void
+    {
+        $this->assertSame('{"Cookie":（伏せた）,"name":"a"}', $this->redactor()->message('{"Cookie":["sid=abcd1234",{"x":"]"}],"name":"a"}'));
+    }
+
+    #[Test]
+    public function 全角の引用符とバックスラッシュも揃える(): void
+    {
+        $this->assertSame('{"password":（伏せた）}', $this->redactor()->message('{＂password＂:＂probe＂}'));
+    }
+
     #[Test]
     public function 写されたDBの文言は_entryの値だけを伏せる(): void
     {

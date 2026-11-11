@@ -7,8 +7,6 @@ use Ad5\RichPhpChatwork\RichChatworkServiceProvider;
 use Ad5\RichPhpChatwork\Source;
 use Ad5\RichPhpChatwork\Tests\FakeTransport;
 use Ad5\RichPhpChatwork\Transport;
-use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Foundation\Exceptions\Handler;
 use Orchestra\Testbench\Foundation\Application;
 
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
@@ -21,10 +19,12 @@ $spare = str_repeat('x', 1024 * (int) ($argv[2] ?? 256));
 register_shutdown_function(static function () use (&$spare): void {
     $spare = null;
 });
+// PHPUnit から動かすと APP_ENV=testing を引き継ぎ、Collision が入らない。本番のコンソールと同じ形にする
+putenv('APP_ENV=production');
+$_ENV['APP_ENV'] = $_SERVER['APP_ENV'] = 'production';
 $app = Application::create(basePath: null);
 $app->detectEnvironment(static fn (): string => 'production');
-// コンソールでは Collision が Laravel のハンドラーを包むので、本番と同じ Laravel のハンドラーにする
-$app->singleton(ExceptionHandler::class, Handler::class);
+// コンソールなので Collision が Laravel のハンドラーを包む。その形でも部品が登録されることも確かめる
 $app->make('config')->set([
     'app.name' => 'Probe',
     'logging.default' => 'single',

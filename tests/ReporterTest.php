@@ -227,7 +227,7 @@ final class ReporterTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertCount(2, $this->transport->sent);
-        $this->assertStringContainsString("同じ例外: 前の知らせ（11/10 14:02）の後の 60 秒に、送らずに 2 回\n", $this->transport->sent[1]['body']);
+        $this->assertStringContainsString("同じ例外: 11/10 14:02 から、送らずに 3 回（送れなかった分を含む）\n", $this->transport->sent[1]['body']);
     }
 
     #[Test]
@@ -529,7 +529,7 @@ final class ReporterTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertCount(2, $this->transport->sent);
-        $this->assertStringContainsString('同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 2 回', $this->transport->sent[1]['body']);
+        $this->assertStringContainsString('同じ例外: 10:00 から、送らずに 3 回（送れなかった分を含む）', $this->transport->sent[1]['body'], '前の知らせの後の窓と取り違えない言い方');
         $index = array_search('例外を Chatwork に送れなかった', $logged->messages, true);
         $this->assertIsInt($index);
         $failure = $logged->contexts[$index]['exception'] ?? null;
@@ -668,14 +668,113 @@ final class ReporterTest extends TestCase
     }
 
     #[Test]
+    public function スクリプトの持ち主とプロセスの持ち主が違っても_予備の一時フォルダを使う(): void
+    {
+        if (! function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+            $this->markTestSkipped('持ち主を替えるには root が要る');
+        }
+
+        $base = '/probe/' . bin2hex(random_bytes(4));
+        $script = sys_get_temp_dir() . '/rich-chatwork-owner-' . bin2hex(random_bytes(4)) . '.php';
+        copy(__DIR__ . '/bin/fallback-owner.php', $script);
+        chown($script, 12345);
+        $run = static fn (): string => (string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($base) . ' ' . escapeshellarg(dirname(__DIR__) . '/vendor/autoload.php') . ' 2>/dev/null');
+
+        try {
+            $this->assertSame('sent', $run());
+            $this->assertSame('throttled', $run(), '別のプロセスでも一時フォルダの印で間引く（スクリプトの持ち主で確かめると使えない）');
+        } finally {
+            unlink($script);
+            new \Illuminate\Filesystem\Filesystem()->deleteDirectory(Throttle::fallbackDirectory($base));
+        }
+    }
+
+    #[Test]
     public function 長さで替えた知らせは_件名の要約を残し_組み立ての失敗と言い分ける(): void
     {
         $oversized = new \ReflectionMethod(Reporter::class, 'oversized');
         $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
         $pdo->errorInfo = ['23000', 1062, 'x'];
 
-        $this->assertSame('[info][title]Probe（production）QueryException: SQLSTATE 23000（長すぎて省いた。ログを見る）[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]', $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
-        $this->assertSame('[info][title]Probe（production）知らせ: 多い（長すぎて省いた。ログを見る）[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]', $oversized->invoke($this->reporter(), null, [], '多い'));
+        $this->assertSame("[info][title]Probe（production）QueryException: SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
+        $this->assertSame("[info][title]Probe（production）知らせ: 多い[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), null, [], '多い'));
+
+        // 要約が長くても、種類（短いクラス名）は件名に残り、要約の後ろから切る
+        $long = new \TypeError('App\\Services\\' . str_repeat('Long', 10) . '\\VeryLongServiceNameForProbe::runSomethingVeryLong(): Argument #1 ($employeeId) must be of type int, null given');
+        $title = (string) preg_replace('/\A\[info\]\[title\](.*?)\[\/title\].*\z/su', '$1', (string) $oversized->invoke($this->reporter(), $long, []));
+        $this->assertStringStartsWith('Probe（production）TypeError: VeryLongServiceNameForProbe::', $title);
+        $this->assertLessThanOrEqual(80, mb_strwidth($title));
+    }
+
+    #[Test]
+    public function メモリ切れで上限を上げるときは_下げない(): void
+    {
+        $previous = ini_get('memory_limit');
+        $room = new \ReflectionMethod(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class, 'makeRoomForMemoryExhaustion');
+        $fatal = new \Symfony\Component\ErrorHandler\Error\FatalError('Allowed memory size of 1024 bytes exhausted', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1]);
+        try {
+            ini_set('memory_limit', '4G');
+            $this->assertTrue($room->invoke(null, $fatal));
+            $this->assertSame('4G', ini_get('memory_limit'), '今より大きいときだけ上げる');
+
+            ini_set('memory_limit', '-1');
+            $this->assertTrue($room->invoke(null, $fatal));
+            $this->assertSame('-1', ini_get('memory_limit'));
+
+            ini_set('memory_limit', (string) (memory_get_usage(true) + 1024 * 1024));
+            $this->assertTrue($room->invoke(null, $fatal));
+            $this->assertGreaterThanOrEqual(memory_get_usage(true) + 30 * 1024 * 1024, (int) ini_get('memory_limit'));
+        } finally {
+            ini_set('memory_limit', (string) $previous);
+        }
+    }
+
+    #[Test]
+    public function Collisionに包まれたハンドラーにも登録し_二重には登録しない(): void
+    {
+        $app = $this->app ?? $this->fail('アプリが無い');
+        $provider = $app->getProvider(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class);
+        $this->assertInstanceOf(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class, $provider);
+        $adapter = new \NunoMaduro\Collision\Adapters\Laravel\ExceptionHandler($app, new \Illuminate\Foundation\Exceptions\Handler($app));
+
+        $provider->attach($adapter);
+        $provider->attach($adapter);
+        $adapter->report(new RuntimeException('probe'));
+
+        $this->assertCount(1, $this->transport->sent);
+    }
+
+    #[Test]
+    public function reportableを持たないハンドラーなら_1度だけ警告する(): void
+    {
+        $app = $this->app ?? $this->fail('アプリが無い');
+        $provider = $app->getProvider(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class);
+        $this->assertInstanceOf(\Ad5\RichPhpChatwork\RichChatworkServiceProvider::class, $provider);
+        $logged = $this->listenLog();
+        $handler = new class () implements \Illuminate\Contracts\Debug\ExceptionHandler {
+            public function report(\Throwable $e): void
+            {
+            }
+
+            public function shouldReport(\Throwable $e): bool
+            {
+                return true;
+            }
+
+            public function render($request, \Throwable $e): \Symfony\Component\HttpFoundation\Response
+            {
+                return new \Symfony\Component\HttpFoundation\Response();
+            }
+
+            public function renderForConsole($output, \Throwable $e): void
+            {
+            }
+        };
+
+        $provider->attach($handler);
+        $provider->attach($handler);
+
+        $this->assertSame(1, count(array_filter($logged->messages, static fn (string $m): bool => str_starts_with($m, '例外のハンドラーに reportable が無い'))));
     }
 
     #[Test]

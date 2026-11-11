@@ -152,6 +152,26 @@ final class JobEntranceTest extends TestCase
     }
 
     #[Test]
+    public function 出した側にIDが無いsyncの失敗が続いても_前のジョブのIDを発端にしない(): void
+    {
+        foreach ([1, 2] as $round) {
+            try {
+                Queue::connection('sync')->push(new FailingJob());
+            } catch (RuntimeException $e) {
+                report($e);
+            }
+            $ids[$round] = FailingJob::$seenRequestId;
+        }
+
+        $this->assertCount(2, $this->transport->sent);
+        $this->assertNotSame($ids[1], $ids[2]);
+        $this->assertStringNotContainsString('発端の Request ID', $this->transport->sent[1]['body'], '1 通目のジョブの ID を発端にしない');
+
+        Event::dispatch(new \Illuminate\Console\Events\CommandFinished('probe', new \Symfony\Component\Console\Input\ArrayInput([]), new \Symfony\Component\Console\Output\NullOutput(), 0));
+        $this->assertFalse(Context::has('request_id'), '入口の終わりで、残したジョブの ID を戻す');
+    }
+
+    #[Test]
     public function 最小の知らせも_普通の知らせと同じRequestIDを出す(): void
     {
         Context::add('request_id', 'req-caller');
