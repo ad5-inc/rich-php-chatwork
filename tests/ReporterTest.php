@@ -807,8 +807,9 @@ final class ReporterTest extends TestCase
     {
         $this->breakCache();
         $directory = Throttle::fallbackDirectory(dirname(__DIR__));
+        $e = new RuntimeException('probe');
 
-        $this->reporter()->report(new RuntimeException('probe'));
+        $this->reporter()->report($e);
 
         $files = array_filter(new \Illuminate\Filesystem\Filesystem()->allFiles($directory), static fn (\SplFileInfo $file): bool => $file->isFile());
         $this->assertNotSame([], $files);
@@ -817,8 +818,8 @@ final class ReporterTest extends TestCase
             $this->assertSame('700', substr(sprintf('%o', (int) fileperms($file->getPath())), -3), 'フォルダは持ち主が辿れる（0600 だと root でない利用者は中に入れない）');
         }
         $this->assertSame(1, count($this->transport->sent));
-        $this->reporter()->report(new RuntimeException('probe'));
-        $this->assertSame(1, count($this->transport->sent), '同じプロセスでも、ファイルの印で 2 度目を間引く');
+        $this->reporter()->report($e);
+        $this->assertSame(1, count($this->transport->sent), 'ファイルの印で 2 度目を間引く');
 
         if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
             new \Illuminate\Filesystem\Filesystem()->deleteDirectory($directory);
