@@ -44,16 +44,41 @@ final class Text
     }
 
     /**
-     * [code] の外は [ ] を全角に。[code] の中は記法の始まり（[ の後ろが英字か /）だけを全角にし、['key']・[$i]・[] は残す
+     * Chatwork が [code] の外で絵文字に替える記号。大文字小文字を区別する（Model::Delete の :D は替わり、report:daily の :d は替わらない）
+     */
+    private const EMOTICONS = [
+        ':)', ':(', ':D', '8-)', ':o', ';)', ';(', ':|', ':*', ':p', ':^)', '|-)', ']:)', '8-|', ':#',
+        '(sweat)', '(blush)', '(inlove)', '(talk)', '(yawn)', '(puke)', '(emo)', '(nod)', '(shake)', '(^^;)', '(whew)',
+        '(clap)', '(bow)', '(roger)', '(flex)', '(dance)', '(:/)', '(gogo)', '(think)', '(please)', '(quick)', '(anger)',
+        '(devil)', '(lightbulb)', '(*)', '(h)', '(F)', '(cracker)', '(eat)', '(^)', '(coffee)', '(beer)', '(handshake)', '(y)',
+    ];
+
+    /** 絵文字の記号の 1 文字目の後ろに挟む、見えない文字（WORD JOINER。改行の位置も作らない） */
+    private const JOINER = "\u{2060}";
+
+    /**
+     * [code] の外は [ ] を全角にし、絵文字の記号を崩す。[code] の中は記法の始まり（[ の後ろが英字か /）だけを全角にし、
+     * ['key']・[$i]・[] は残す（[code] の中は絵文字に替わらない）
      */
     public static function escape(string $text, bool $code): string
     {
         if (! $code) {
-            return strtr($text, ['[' => '［', ']' => '］']);
+            return self::breakEmoticons(strtr($text, ['[' => '［', ']' => '］']));
         }
 
         // 置き換えに失敗したら、残すより全部を全角にする方を選ぶ
         return self::replace('/\[(?=[A-Za-z\/])/u', '［', $text) ?? str_replace('[', '［', $text);
+    }
+
+    /**
+     * 絵文字の記号の 1 文字目の後ろに見えない文字を挟む（]:) は ] を全角にした後なので、中の :) で崩れる）
+     */
+    public static function breakEmoticons(string $text): string
+    {
+        $symbols = self::EMOTICONS;
+        $pattern = '/' . implode('|', array_map(static fn (string $symbol): string => preg_quote($symbol, '/'), $symbols)) . '/u';
+
+        return self::replace($pattern, static fn (array $match): string => mb_substr($match[0], 0, 1) . self::JOINER . mb_substr($match[0], 1), $text) ?? $text;
     }
 
     /**
