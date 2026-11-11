@@ -7,6 +7,7 @@ namespace Ad5\RichPhpChatwork;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Log\Context\Events\ContextHydrated;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
@@ -16,10 +17,14 @@ use Illuminate\Queue\Events\Looping;
 use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
+use Symfony\Component\ErrorHandler\Error\FatalError;
 use Throwable;
 
 final class RichChatworkServiceProvider extends ServiceProvider
 {
+    /** メモリ切れのときに足すメモリ。部品の組み立て（数 MB）と Laravel の元の記録に足りる量 */
+    private const MEMORY_ROOM = 32 * 1024 * 1024;
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/rich-chatwork.php', 'rich-chatwork');
@@ -50,6 +55,8 @@ final class RichChatworkServiceProvider extends ServiceProvider
             if ($handler instanceof Handler) {
                 // Handler::reportThrowable() は callback を try で包まない。ここから投げると Laravel が元の例外をログに書かずに終わる
                 $handler->reportable(function (Throwable $e): void {
+                    self::makeRoomForMemoryExhaustion($e);
+
                     try {
                         $this->app->make(Reporter::class)->report($e);
                     } catch (Throwable $failure) {
@@ -64,6 +71,24 @@ final class RichChatworkServiceProvider extends ServiceProvider
         });
 
         $this->listenToJobs();
+    }
+
+    /**
+     * メモリ切れのときは、部品を動かす前に上限を少し上げる。Laravel は 32KB しか空けずに report() を呼び、部品の callback が
+     * 元の記録より先に動く。部品がメモリを取って 2 度目のメモリ切れを起こすと、元の記録まで止まる
+     */
+    private static function makeRoomForMemoryExhaustion(Throwable $e): void
+    {
+        if (! $e instanceof FatalError || ! str_starts_with($e->getMessage(), 'Allowed memory size of')) {
+            return;
+        }
+
+        $limit = ini_get('memory_limit');
+        if ($limit === '-1') {
+            return;
+        }
+
+        @ini_set('memory_limit', (string) (memory_get_usage(true) + self::MEMORY_ROOM));
     }
 
     /**
@@ -83,6 +108,9 @@ final class RichChatworkServiceProvider extends ServiceProvider
             }
         };
 
+        $events->listen(ContextHydrated::class, static function () use ($entrance, $safely): void {
+            $safely(static fn () => $entrance()->hydrated());
+        });
         $events->listen(JobProcessing::class, static function (JobProcessing $event) use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->processing($event->job));
         });

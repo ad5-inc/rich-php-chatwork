@@ -31,23 +31,39 @@ use WeakMap;
  */
 final class JobEntrance
 {
-    /** @var list<array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool}> */
+    /** @var list<array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool}> */
     private array $stack = [];
 
-    /** @var WeakMap<Throwable, array{label: string, id: string, origin: ?string}> */
+    /** @var WeakMap<Throwable, array{label: string, id: string, origin: ?string, sync: bool}> */
     private WeakMap $captured;
+
+    /** 前の JobProcessing の後に Laravel が Context を入れ替えた（ContextHydrated） */
+    private bool $hydrated = false;
 
     public function __construct(private readonly Config $config)
     {
         $this->captured = new WeakMap();
     }
 
+    /**
+     * ContextHydrated。Laravel が JobProcessing で Context を payload の物に入れ替えた
+     */
+    public function hydrated(): void
+    {
+        $this->hydrated = true;
+    }
+
     public function processing(Job $job): void
     {
-        // 戻さないまま次のジョブが来た（ワーカーの周の頭のイベントが来なかった）。Context は Laravel が入れ替えた後なので、印だけ捨てる
+        // 戻さないまま次のジョブが来た（ワーカーの周の頭のイベントが来なかった）。
+        // Context が入れ替わった後なら、戻すと新しい Context を古い値で上書きするので印だけ捨てる。入れ替わっていなければ戻してから捨てる
         while (($top = end($this->stack)) !== false && $top['failed']) {
             array_pop($this->stack);
+            if (! $this->hydrated) {
+                $this->restore($top);
+            }
         }
+        $this->hydrated = false;
 
         $key = $this->key();
         $had = Context::has($key);
@@ -66,6 +82,7 @@ final class JobEntrance
             'previous' => $previous,
             'had' => $had,
             'failed' => false,
+            'sync' => $job instanceof SyncJob,
         ];
         Context::add($key, $id);
     }
@@ -79,7 +96,7 @@ final class JobEntrance
         $uuid = $this->uuid($job);
         $frame = $this->find($uuid);
         if ($frame !== null) {
-            $entry = ['label' => $frame['label'], 'id' => $frame['id'], 'origin' => $frame['origin']];
+            $entry = ['label' => $frame['label'], 'id' => $frame['id'], 'origin' => $frame['origin'], 'sync' => $frame['sync']];
             $main = Chain::of($e, $this->wrappers())->main;
             foreach ([$e, $main] as $exception) {
                 if (! $this->captured->offsetExists($exception)) {
@@ -91,13 +108,24 @@ final class JobEntrance
     }
 
     /**
-     * JobAttempted。sync のジョブだけ、ここ（呼び出し側へ戻る所）で戻す。ワーカーでは report() より前に来るので戻さない
+     * JobAttempted。sync のジョブだけ、ここ（呼び出し側へ戻る所）で戻す。ワーカーでは report() より前に来るので戻さない。
+     * 出した側に ID が無い sync で失敗したときは戻さず、ジョブの ID を残す（呼び出し側の例外の記録もその番号で引けるように）
      */
     public function attempted(Job $job): void
     {
-        if ($job instanceof SyncJob) {
-            $this->finished($job);
+        if (! $job instanceof SyncJob) {
+            return;
         }
+
+        $uuid = $this->uuid($job);
+        $frame = $this->find($uuid);
+        if ($frame !== null && $frame['failed'] && $frame['origin'] === null) {
+            $this->stack = array_values(array_filter($this->stack, static fn (array $f): bool => $f['uuid'] !== $uuid));
+
+            return;
+        }
+
+        $this->finished($job);
     }
 
     /**
@@ -128,7 +156,7 @@ final class JobEntrance
     }
 
     /**
-     * @param array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool} $frame
+     * @param array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool} $frame
      */
     private function restore(array $frame): void
     {
@@ -138,7 +166,7 @@ final class JobEntrance
     /**
      * 例外の入口。失敗のイベントで取っておいた物を先に見て、無ければ動いている最中のジョブ
      *
-     * @return array{label: string, id: string, origin: ?string}|null
+     * @return array{label: string, id: string, origin: ?string, sync: bool}|null
      */
     public function of(Throwable $e, Throwable $main): ?array
     {
@@ -149,11 +177,12 @@ final class JobEntrance
 
         $top = end($this->stack);
 
-        return $top === false ? null : ['label' => $top['label'], 'id' => $top['id'], 'origin' => $top['origin']];
+        // 動いている最中のジョブの中で report() したなら、呼び出し側で記録されたのではない
+        return $top === false ? null : ['label' => $top['label'], 'id' => $top['id'], 'origin' => $top['origin'], 'sync' => false];
     }
 
     /**
-     * @return array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool}|null
+     * @return array{uuid: string, label: string, id: string, origin: ?string, previous: mixed, had: bool, failed: bool, sync: bool}|null
      */
     private function find(string $uuid): ?array
     {
