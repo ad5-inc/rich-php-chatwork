@@ -15,6 +15,11 @@ final class Source
     {
     }
 
+    public function base(): string
+    {
+        return $this->basePath;
+    }
+
     public function relative(string $path): string
     {
         $base = $this->basePath . DIRECTORY_SEPARATOR;

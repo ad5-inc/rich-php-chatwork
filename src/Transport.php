@@ -9,5 +9,5 @@ namespace Ad5\RichPhpChatwork;
  */
 interface Transport
 {
-    public function send(string $token, string $room, string $body): void;
+    public function send(#[\SensitiveParameter] string $token, string $room, #[\SensitiveParameter] string $body): void;
 }

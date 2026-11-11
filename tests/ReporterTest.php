@@ -669,10 +669,8 @@ final class ReporterTest extends TestCase
     public function 送る直前に3万文字を超えていたら_最小の知らせに替える(): void
     {
         $reporter = $this->reporter();
-        $deliver = (fn (string $token, string $room, string $key, int $seconds, \Closure $compose, \Closure $fallback, string $label, string $name) => $this->deliver($token, $room, $key, $seconds, $compose, $fallback, $label, $name))->bindTo($reporter, Reporter::class);
-        $this->assertInstanceOf(\Closure::class, $deliver);
-
-        $deliver('probe-token', '12345', 'guard', 60, static fn (array $extra): string => str_repeat('a', 30001), static fn (array $extra): string => 'minimal', '同じ例外', 'Probe');
+        // 組み立ての全部の項目に上限があるので、本文を直接渡して最後の守りだけを見る
+        new \ReflectionMethod(Reporter::class, 'deliver')->invoke($reporter, 'probe-token', '12345', 'guard', 60, static fn (array $extra): string => str_repeat('a', 30001), static fn (array $extra): string => 'minimal', '同じ例外', 'Probe');
 
         $this->assertSame('minimal', $this->transport->sent[0]['body']);
     }
@@ -694,9 +692,9 @@ final class ReporterTest extends TestCase
         $this->assertIsInt($index);
         $failure = $logged->contexts[$index]['exception'] ?? null;
         $this->assertInstanceOf(\Throwable::class, $failure);
-        $strings = array_filter(array_merge(...array_map(static fn (array $frame): array => array_values($frame['args'] ?? []), $failure->getTrace())), is_string(...));
-        $this->assertNotContains('probe-token', $strings);
-        $this->assertNotSame([], array_filter(array_merge(...array_map(static fn (array $frame): array => array_values($frame['args'] ?? []), $failure->getTrace())), static fn (mixed $arg): bool => $arg instanceof \SensitiveParameterValue), '引数は残る設定になっている');
+        $args = array_merge(...array_map(static fn (array $frame): array => $frame['args'] ?? [], $failure->getTrace()));
+        $this->assertNotContains('probe-token', array_filter($args, is_string(...)));
+        $this->assertNotSame([], array_filter($args, static fn (mixed $arg): bool => $arg instanceof \SensitiveParameterValue), '引数は残る設定になっている');
 
         foreach ([[Transport::class, 'send'], [PhpChatworkTransport::class, 'send']] as [$class, $method]) {
             foreach (['token', 'body'] as $parameter) {

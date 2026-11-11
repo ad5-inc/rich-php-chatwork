@@ -52,7 +52,7 @@ final class Reporter
         private readonly Source $source,
         ?JobEntrance $entrance = null,
     ) {
-        $this->throttle = new Throttle($config, $cache);
+        $this->throttle = new Throttle($config, $cache, Throttle::fallbackDirectory($source->base()));
         $this->entrance = $entrance ?? new JobEntrance($config);
     }
 
@@ -78,7 +78,9 @@ final class Reporter
             $token = Settings::string($this->config, 'access_token');
             $room = Settings::string($this->config, 'room_id');
             $send = $token !== '' && $room !== '' && $this->environmentAllows();
-        } catch (Throwable) {
+        } catch (Throwable $failure) {
+            $this->logFailure('例外を Chatwork に送れなかった', $failure, $e);
+
             return;
         }
 
@@ -102,18 +104,18 @@ final class Reporter
                     } catch (Throwable $failure) {
                         $this->logFailure('例外の知らせを組み立てられなかった', $failure, $e);
 
-                        return $this->minimal($e);
+                        return $this->minimal($e, $extra);
                     }
                 };
             } catch (Throwable $failure) {
                 $this->logFailure('例外の知らせを組み立てられなかった', $failure, $e);
                 $key = 'rich-chatwork:minimal:' . sha1($e::class . '|' . $this->source->relative($e->getFile()) . ':' . $e->getLine());
                 $name = new Names($this->source)->short($e::class);
-                $compose = fn (array $extra): string => $this->minimal($e);
+                $compose = fn (array $extra): string => $this->minimal($e, $extra);
             }
 
             $seconds = Settings::positive($this->config, 'throttle_seconds', 60);
-            $this->deliver($token, $room, $key, $seconds, $compose, '同じ例外', $name);
+            $this->deliver($token, $room, $key, $seconds, $compose, fn (array $extra): string => $this->minimal($e, $extra), '同じ例外', $name);
         } catch (Throwable $sendError) {
             $this->logFailure('例外を Chatwork に送れなかった', $sendError, $e);
         }
@@ -133,7 +135,15 @@ final class Reporter
         try {
             $token = Settings::string($this->config, 'access_token');
             $room = Settings::string($this->config, 'room_id');
-            if ($token === '' || $room === '' || ! $this->environmentAllows()) {
+            $send = $token !== '' && $room !== '' && $this->environmentAllows();
+        } catch (Throwable $failure) {
+            $this->logFailure('知らせを Chatwork に送れなかった', $failure, null);
+
+            return;
+        }
+
+        try {
+            if (! $send) {
                 return;
             }
 
@@ -144,10 +154,10 @@ final class Reporter
                 } catch (Throwable $failure) {
                     $this->logFailure('知らせを組み立てられなかった', $failure, null);
 
-                    return $this->minimal(null);
+                    return $this->minimal(null, $extra);
                 }
             };
-            $this->deliver($token, $room, 'rich-chatwork-notice:' . sha1($throttleKey), $seconds, $compose, '同じ知らせ', '知らせ');
+            $this->deliver($token, $room, 'rich-chatwork-notice:' . sha1($throttleKey), $seconds, $compose, fn (array $extra): string => $this->minimal(null, $extra), '同じ知らせ', '知らせ');
         } catch (Throwable $sendError) {
             $this->logFailure('知らせを Chatwork に送れなかった', $sendError, null);
         }
@@ -169,7 +179,7 @@ final class Reporter
         $chain = Chain::of($e, $this->wrappers());
         $main = $chain->main;
         [$state, $driver] = $main instanceof QueryException ? Details::sqlState($main) : [null, null];
-        $disconnected = $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, [2002, 1045], true)));
+        $disconnected = Details::isOutage($state, $driver);
 
         $line = $this->source->appLine($main, null);
         $where = match (true) {
@@ -184,10 +194,11 @@ final class Reporter
     /**
      * 間引き → 全体の上限 → 送る。送れなかったら間引きの印を消して回数を戻し、すぐ送り直せるようにする
      *
-     * @param Closure(list<string>): string $compose 本文の末尾に足す行（間引いた回数・上限で送らなかった件数）を受けて本文を作る
-     * @param string $name 全体の上限で送らなかったときに数える名前（短いクラス名）
+     * @param Closure(array<mixed>): string $compose 本文の末尾に足す行（間引いた回数・上限で送らなかった件数）を受けて本文を作る
+     * @param Closure(array<mixed>): string $fallback 本文が長すぎたときに替える最小の知らせ
+     * @param string $name 全体の上限で送らなかったときに数える名前（短いクラス名、notice は「知らせ」）
      */
-    private function deliver(string $token, string $room, string $key, int $seconds, Closure $compose, string $label, string $name): void
+    private function deliver(#[\SensitiveParameter] string $token, string $room, string $key, int $seconds, Closure $compose, Closure $fallback, string $label, string $name): void
     {
         $this->throttle->begin();
         $state = $this->throttle->attempt($key, $seconds);
@@ -196,19 +207,31 @@ final class Reporter
         }
 
         if (! $this->throttle->slot(Settings::positive($this->config, 'max_per_minute', 20))) {
-            $this->throttle->release($key, $state['count'] ?? 0);
-            $this->throttle->overflow($name);
+            $this->throttle->release($key, $state['count']);
+            $this->throttle->overflow($key, $name, $label === '同じ知らせ');
 
             return;
         }
 
         $overflow = $this->throttle->takeOverflow();
-        $extra = array_values(array_filter([$this->repeatLine($label, $state, $seconds), self::overflowLine($overflow)], is_string(...)));
+        $entries = $overflow['entries'] ?? [];
+        // 上限で落ちたのが送る物と同じキーなら、「ほか」ではなくその物の回数に入れる
+        $own = $entries[$key]['count'] ?? 0;
+        unset($entries[$key]);
+        $extra = array_values(array_filter([
+            $this->repeatLine($label, ['count' => $state['count'] + $own, 'last' => $state['last']], $seconds),
+            $this->overflowLine($entries, $overflow['since'] ?? null),
+        ], is_string(...)));
 
         try {
-            $this->transport->send($token, $room, $compose($extra));
+            $body = $compose($extra);
+            // 最後の守り。どの項目にも上限はあるが、超えたら Chatwork に断られて届かないので、最小の知らせに替える
+            if (mb_strlen($body) > Body::MAX_LENGTH) {
+                $body = $fallback($extra);
+            }
+            $this->transport->send($token, $room, $body);
         } catch (Throwable $sendError) {
-            $this->throttle->release($key, $state['count'] ?? 0);
+            $this->throttle->release($key, $state['count']);
             $this->throttle->restoreOverflow($overflow);
 
             throw $sendError;
@@ -218,20 +241,28 @@ final class Reporter
     }
 
     /**
-     * 「ほかの例外: 15 件（QueryException 12・TypeError 3、上限で送らなかった。ログを見る）」。多い順に 3 つまで
+     * 「ほかの例外: 03:00 から 15 件（QueryException 12・TypeError 3、上限で送らなかった。ログを見る）」。多い順に 3 つまで。
+     * notice が含まれていれば「ほかの知らせ・例外」
      *
-     * @param array<string, int> $overflow
+     * @param array<string, array{name: string, count: int, notice: bool}> $entries
      */
-    private static function overflowLine(array $overflow): ?string
+    private function overflowLine(array $entries, ?int $since): ?string
     {
-        if ($overflow === []) {
+        if ($entries === []) {
             return null;
         }
 
-        arsort($overflow);
-        $top = array_map(static fn (string $name, int $count): string => "{$name} {$count}", array_keys(array_slice($overflow, 0, 3, true)), array_slice($overflow, 0, 3, true));
+        $counts = [];
+        foreach ($entries as $entry) {
+            $counts[$entry['name']] = ($counts[$entry['name']] ?? 0) + $entry['count'];
+        }
+        arsort($counts);
+        $top = array_slice($counts, 0, 3, true);
+        $names = implode('・', array_map(static fn (string $name, int $count): string => "{$name} {$count}", array_keys($top), $top));
+        $label = array_any($entries, static fn (array $entry): bool => $entry['notice']) ? 'ほかの知らせ・例外' : 'ほかの例外';
+        $from = $since === null ? '' : $this->clock($since) . ' から ';
 
-        return Text::field('ほかの例外: ' . array_sum($overflow) . ' 件（' . implode('・', $top) . '、上限で送らなかった。ログを見る）', false, null, self::LINE_WIDTH);
+        return Text::field("{$label}: {$from}" . array_sum($counts) . " 件（{$names}、上限で送らなかった。ログを見る）", false, null, self::LINE_WIDTH);
     }
 
     /**
@@ -239,7 +270,10 @@ final class Reporter
      *
      * $e が null なら notice の知らせ
      */
-    private function minimal(?Throwable $e): string
+    /**
+     * @param array<mixed> $extra 間引いた回数・上限で送らなかった件数の行（数字とクラス名だけ）
+     */
+    private function minimal(?Throwable $e, array $extra = []): string
     {
         try {
             $prefix = $this->expand($e === null ? 'notice_title' : 'title', '{app}（{env}）');
@@ -250,7 +284,10 @@ final class Reporter
         $id = $this->requestId();
 
         return '[info][title]' . Text::cut(Text::escape(str_replace("\0", '', $prefix . $headline), false), self::TITLE_WIDTH) . '[/title]'
-            . ($id === null ? '' : 'Request ID: ' . Text::field($id, false, null, self::ID_WIDTH) . '（中身はログをこの番号で引く）')
+            . implode("\n", array_filter([
+                $id === null ? null : 'Request ID: ' . Text::field($id, false, null, self::ID_WIDTH) . '（中身はログをこの番号で引く）',
+                ...array_filter($extra, is_string(...)),
+            ], is_string(...)))
             . '[/info]';
     }
 
@@ -310,7 +347,7 @@ final class Reporter
         $assembled = KnownMessage::of($main);
         $message = $this->message($main, $assembled, $redactor);
         if ($message !== null) {
-            $body->code($message);
+            $body->code($message, 'message');
         }
 
         $kindLine = $this->kindLine($kind, $assembled !== null && $assembled !== KnownMessage::FAILED ? $assembled : null);
@@ -357,6 +394,11 @@ final class Reporter
         }
         if (mb_strlen($text) > Body::MAX_LENGTH) {
             $text = $body->drop('snippet')->render($title);
+        }
+        // それでも超えるなら（message_max_length を大きくした文言）、文言を詰める
+        if (mb_strlen($text) > Body::MAX_LENGTH && $message !== null) {
+            $keep = max(0, mb_strlen($message) - (mb_strlen($text) - Body::MAX_LENGTH) - 1);
+            $text = $body->replace('message', mb_substr($message, 0, $keep) . '…')->render($title);
         }
 
         return $text;
@@ -451,23 +493,29 @@ final class Reporter
     /**
      * 「同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 12 回」。数えていない（予備の動き）・0 回なら出さない
      *
-     * @param array{count: ?int, last: ?int} $state
+     * @param array{count: int, last: ?int} $state
      */
     private function repeatLine(string $label, array $state, int $seconds): ?string
     {
-        if ($state['count'] === null || $state['count'] === 0) {
+        if ($state['count'] === 0) {
             return null;
         }
 
-        $when = '前の知らせ';
-        if ($state['last'] !== null) {
-            $timezone = $this->config->get('app.timezone');
-            $timezone = is_string($timezone) && $timezone !== '' ? $timezone : date_default_timezone_get();
-            $last = Carbon::createFromTimestamp($state['last'], $timezone);
-            $when .= '（' . $last->format($last->isSameDay(Carbon::now($timezone)) ? 'H:i' : 'n/j H:i') . '）';
-        }
+        $when = '前の知らせ' . ($state['last'] === null ? '' : '（' . $this->clock($state['last']) . '）');
 
         return "{$label}: {$when}の後の " . self::duration($seconds) . "に、送らずに {$state['count']} 回";
+    }
+
+    /**
+     * アプリのタイムゾーンの時刻。当日でなければ日付を付ける
+     */
+    private function clock(int $timestamp): string
+    {
+        $timezone = $this->config->get('app.timezone');
+        $timezone = is_string($timezone) && $timezone !== '' ? $timezone : date_default_timezone_get();
+        $time = Carbon::createFromTimestamp($timestamp, $timezone);
+
+        return $time->format($time->isSameDay(Carbon::now($timezone)) ? 'H:i' : 'n/j H:i');
     }
 
     private static function duration(int $seconds): string
@@ -489,18 +537,49 @@ final class Reporter
         $redactor = new Redactor(Settings::strings($this->config, 'message_redact_patterns', []));
         $heading = Text::cut(Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ', false, null, self::TITLE_WIDTH) . Text::field($title, false, null, self::TITLE_WIDTH), self::TITLE_WIDTH);
         $rows = array_map(static fn (string $line): string => Text::field($line, false, $redactor->message(...), self::LINE_WIDTH), $lines);
-        $block = $code === null ? null : implode("\n", array_map(
+        $codeLines = $code === null ? null : array_map(
             static fn (string $line): string => Text::field($line, true, $redactor->message(...), self::LINE_WIDTH),
             explode("\n", str_replace(["\r\n", "\r"], "\n", $code)),
-        ));
+        );
 
-        $text = self::noticeBody($rows, null, $block, $extra)->render($heading);
-        for ($keep = count($rows); mb_strlen($text) > Body::MAX_LENGTH && $keep > 0;) {
+        // 長すぎたら、枠の末尾の行 → 地の文の行の順に、後ろから落とす。落とす行数は超えた文字数から見積もって詰める
+        $keepCode = $codeLines === null ? 0 : count($codeLines);
+        $keepRows = count($rows);
+        while (true) {
+            $block = $codeLines === null ? null : implode("\n", [
+                ...array_slice($codeLines, 0, $keepCode),
+                ...($keepCode < count($codeLines) ? ['（以下 ' . (count($codeLines) - $keepCode) . ' 行は省いた）'] : []),
+            ]);
+            $omitted = $keepRows < count($rows) ? '（以下 ' . (count($rows) - $keepRows) . ' 行は省いた）' : null;
+            $text = self::noticeBody(array_slice($rows, 0, $keepRows), $omitted, $block, $extra)->render($heading);
+
+            $over = mb_strlen($text) - Body::MAX_LENGTH;
+            if ($over <= 0) {
+                return $text;
+            }
+            if ($codeLines !== null && $keepCode > 0) {
+                $keepCode = self::keepWithin($codeLines, $keepCode, $over + 30);
+            } elseif ($keepRows > 0) {
+                $keepRows = self::keepWithin($rows, $keepRows, $over + 30);
+            } else {
+                return $text;
+            }
+        }
+    }
+
+    /**
+     * 先頭から $keep 行のうち、後ろから $chars 文字（改行を含む）以上を落として残る行数
+     *
+     * @param list<string> $lines
+     */
+    private static function keepWithin(array $lines, int $keep, int $chars): int
+    {
+        for ($dropped = 0; $keep > 0 && $dropped < $chars;) {
             $keep--;
-            $text = self::noticeBody(array_slice($rows, 0, $keep), '（以下 ' . (count($rows) - $keep) . ' 行は省いた）', $block, $extra)->render($heading);
+            $dropped += mb_strlen($lines[$keep]) + 1;
         }
 
-        return $text;
+        return $keep;
     }
 
     /**

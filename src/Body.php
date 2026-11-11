@@ -58,6 +58,16 @@ final class Body
         return $this;
     }
 
+    /**
+     * $block の塊の中身を置き換える
+     */
+    public function replace(string $block, string $text): self
+    {
+        $this->segments = array_map(static fn (array $segment): array => $segment['block'] === $block ? [...$segment, 'text' => $text] : $segment, $this->segments);
+
+        return $this;
+    }
+
     public function render(string $title): string
     {
         $body = "[info][title]{$title}[/title]";
