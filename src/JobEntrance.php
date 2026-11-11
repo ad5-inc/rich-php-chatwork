@@ -158,7 +158,9 @@ final class JobEntrance
     }
 
     /**
-     * 一番外のコマンドの終わりでだけ、残した ID を戻す。HTTP の中の Artisan::call では戻さない（$console が false）
+     * 一番外のコマンドの終わりでだけ、残した ID を戻す。HTTP の中の Artisan::call では戻さない（$console が false）。
+     * Octane でも $console は false になる（Application::runningInConsole() は APP_RUNNING_IN_CONSOLE の env を SAPI より先に見て、
+     * Octane の起動はそれを false にする）
      */
     public function commandFinished(bool $console): void
     {
