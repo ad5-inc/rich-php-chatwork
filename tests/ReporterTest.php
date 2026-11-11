@@ -136,11 +136,6 @@ final class ReporterTest extends TestCase
         yield '1 行目が Array' => ["Array\n(\n    [pin] => probe-pw-19\n)", ['probe-pw-19']];
         yield '1 行目が {' => ["{\n    \"pin\": \"probe-pw-20\"\n}", ['probe-pw-20']];
         yield '1 行目が array (' => ["array (\n  'pin' => 'probe-pw-21',\n)", ['probe-pw-21']];
-        yield 'プロセスの文言を写した物' => ["The command \"mysqldump -pS3cretPw hito\" failed.\n\nExit Code: 2", ['S3cretPw']];
-        yield 'プロセスの時間切れを写した物（1 行）' => ['The process "mysqldump -uroot -pS3cretPw hito" exceeded the timeout of 60 seconds.', ['S3cretPw']];
-        yield '前置き付きのプロセスの失敗の写し' => ["Backup failed: The command \"mysqldump -pS3cret db\" failed.\n\nExit Code: 2", ['S3cret']];
-        yield '前置き付きの時間切れの写し' => ['Backup failed: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.', ['S3cret']];
-        yield '先頭に空白がある写し' => ['  The command "mysqldump -pS3cret db" failed.', ['S3cret']];
         yield '1 行目の終わりが {' => ["payload {\n  \"pin\": \"probe-pw-22\"\n}", ['probe-pw-22']];
     }
 
@@ -162,6 +157,37 @@ final class ReporterTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function processCopies(): iterable
+    {
+        yield 'プロセスの文言を写した物' => ["The command \"mysqldump -pS3cretPw hito\" failed.\n\nExit Code: 2", ['S3cretPw']];
+        yield 'プロセスの時間切れを写した物（1 行）' => ['The process "mysqldump -uroot -pS3cretPw hito" exceeded the timeout of 60 seconds.', ['S3cretPw']];
+        yield '前置き付きのプロセスの失敗の写し' => ["Backup failed: The command \"mysqldump -pS3cret db\" failed.\n\nExit Code: 2", ['S3cret']];
+        yield '前置き付きの時間切れの写し' => ['Backup failed: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.', ['S3cret']];
+        yield '先頭に空白がある写し' => ['  The command "mysqldump -pS3cret db" failed.', ['S3cret']];
+        yield '小文字の写し' => ['Backup: the command "mysqldump -pS3cret db" failed.', ['S3cret']];
+        yield '引用符を含むコマンドラインの写し' => ['The command "sh -c "mysqldump -pS3cret db"" failed.', ['S3cret']];
+    }
+
+    /**
+     * @param list<string> $secrets
+     */
+    #[Test]
+    #[DataProvider('processCopies')]
+    public function 写したプロセスの文言は_コマンドラインを含むので省く(string $message, array $secrets): void
+    {
+        config(['rich-chatwork.send_message' => true]);
+
+        $body = $this->reporter()->body($this->failWithMessage($message));
+
+        $this->assertStringContainsString('[/title][code]（コマンドラインを含むので省いた。ログを見る）[/code]アプリの行: ', $body);
+        foreach ($secrets as $secret) {
+            $this->assertStringNotContainsString($secret, $body);
+        }
+    }
+
+    /**
      * @return iterable<string, array{string}>
      */
     public static function sentences(): iterable
@@ -170,6 +196,8 @@ final class ReporterTest extends TestCase
         yield '配列のキー' => ['Undefined array key "name"'];
         yield '未定義のメソッド' => ['Call to undefined method App\X::y()'];
         yield '短い文' => ['鍵のファイルが無い'];
+        yield '無いコマンド' => ['The command "report:dailyy" does not exist.'];
+        yield 'コマンドの戻り値' => ['The command "x" must return an integer value'];
         yield '関数の名前' => ['in_array(): Argument #2 ($haystack) must be of type array, null given'];
     }
 
@@ -225,7 +253,7 @@ final class ReporterTest extends TestCase
     {
         $this->reporter()->notice('バックアップ', ['失敗した: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.'], 'backup');
 
-        $this->assertStringContainsString('[/title]（値の書き出しを含むので省いた。ログを見る）[/info]', $this->transport->sent[0]['body']);
+        $this->assertStringContainsString('[/title]（コマンドラインを含むので省いた。ログを見る）[/info]', $this->transport->sent[0]['body']);
         $this->assertStringNotContainsString('S3cret', $this->transport->sent[0]['body']);
     }
 

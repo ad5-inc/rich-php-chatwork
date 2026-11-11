@@ -97,6 +97,9 @@ final class RedactorTest extends PlainTestCase
         yield '/ と \\/ が混ざる URL' => ['GET https://api.example.com/v1/a\\/b/12345 end', 'GET https://api.example.com/v1/a\\/b/{…} end'];
         yield '// で始まるスキームの無い URL' => ['src //hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecret12 end', 'src //hooks.slack.example/services/{…}/{…}/{…} end'];
         yield 'ポートのあるスキームの無い URL' => ['post hooks.example.com:8443/hook/T0PROBE01 end', 'post hooks.example.com:8443/hook/{…} end'];
+        yield '途中に ] がある URL のパス' => ['GET https://api.example.com/hook/abc]/Secret12 end', 'GET https://api.example.com/hook/{…}/{…} end'];
+        yield '\\/\\/ で始まるスキームの無い URL' => ['src \\/\\/hooks.slack.example\\/services\\/T0PROBE01\\/B0PROBE02\\/ProbeSecret12 end', 'src \\/\\/hooks.slack.example\\/services\\/{…}\\/{…}\\/{…} end'];
+        yield 'ホストの後ろが \\/ のスキームの無い URL' => ['post hooks.slack.example\\/services\\/T0PROBE01 end', 'post hooks.slack.example\\/services\\/{…} end'];
         yield 'Amex' => ['card 3782 822463 10005 end', 'card （伏せた） end'];
         yield 'Diners' => ['card 3056-930902-5904 end', 'card （伏せた） end'];
         yield 'スキームの無い URL' => ['post to hooks.slack.example/services/T0PROBE01/B0PROBE02/ProbeSecretProbeSecret12 failed', 'post to hooks.slack.example/services/{…}/{…}/{…} failed'];

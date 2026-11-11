@@ -180,11 +180,11 @@ final class KnownMessageTest extends PlainTestCase
     }
 
     #[Test]
-    public function 時間切れの秒数は_1秒未満なら小数2桁で_もっと短ければ1秒未満と書く(): void
+    public function 時間切れの秒数は_1秒未満なら小数2桁で_もっと短ければ0_01秒未満と書く(): void
     {
         $this->assertSame('外のコマンドの時間切れ（0.04 秒、コマンドラインはログ）', KnownMessage::of($this->timedOut(0.04)));
-        $this->assertSame('外のコマンドの時間切れ（1 秒未満、コマンドラインはログ）', KnownMessage::of($this->timedOut(0.001)));
-        $this->assertSame('外のコマンドの時間切れ・1 秒未満', \Ad5\RichPhpChatwork\Details::of($this->timedOut(0.001))->summary);
+        $this->assertSame('外のコマンドの時間切れ（0.01 秒未満、コマンドラインはログ）', KnownMessage::of($this->timedOut(0.001)));
+        $this->assertSame('外のコマンドの時間切れ・0.01 秒未満', \Ad5\RichPhpChatwork\Details::of($this->timedOut(0.001))->summary);
     }
 
     #[Test]
