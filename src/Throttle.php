@@ -67,7 +67,9 @@ final class Throttle
     /**
      * 送ってよければ、前の知らせの後に送らなかった回数と前に送った時刻を返す。送らないなら null
      *
-     * @return array{count: int, last: ?int}|null
+     * first は最初に数えた時刻、since は送れなかった分を含めて数え始めた時刻（送れなかったことがあるときだけ）
+     *
+     * @return array{count: int, last: ?int, first: ?int, since: ?int}|null
      */
     public function attempt(string $key, int $seconds): ?array
     {
@@ -79,14 +81,22 @@ final class Throttle
                 }
                 $store->add("{$key}:count", 0, self::DAY);
                 $store->increment("{$key}:count");
+                $store->add("{$key}:first", now()->getTimestamp(), self::DAY);
 
                 return null;
             }
 
             $count = $store->pull("{$key}:count");
             $last = $store->get("{$key}:last");
+            $first = $store->pull("{$key}:first");
+            $since = $store->pull("{$key}:since");
 
-            return ['count' => is_numeric($count) ? (int) $count : 0, 'last' => is_int($last) ? $last : null];
+            return [
+                'count' => is_numeric($count) ? (int) $count : 0,
+                'last' => is_int($last) ? $last : null,
+                'first' => is_int($first) ? $first : null,
+                'since' => is_int($since) ? $since : null,
+            ];
         });
     }
 
@@ -100,14 +110,28 @@ final class Throttle
 
     /**
      * 送れなかった・上限で送らなかったら、間引きの印を消し、読んだ回数を戻す。次に同じ例外が起きたらすぐ送り直す
+     *
+     * 送れなかったとき（$failed）は、その 1 回も数え、数え始めた時刻（since）を置く。次の知らせは
+     * 「前の知らせの後の 60 秒」ではなく「since から」の言い方になる（送れなかった間は前の知らせの窓と合わない）
+     *
+     * @param array{count: int, last: ?int, first: ?int, since: ?int} $state attempt() の返した物
      */
-    public function release(string $key, int $count): void
+    public function release(string $key, array $state, bool $failed): void
     {
-        $this->run(static function (Cache $store) use ($key, $count): void {
+        $count = $state['count'] + ($failed ? 1 : 0);
+        $since = $failed ? ($state['since'] ?? $state['first'] ?? now()->getTimestamp()) : $state['since'];
+
+        $this->run(static function (Cache $store) use ($key, $count, $state, $since): void {
             $store->forget($key);
             if ($count > 0) {
                 $store->add("{$key}:count", 0, self::DAY);
                 $store->increment("{$key}:count", $count);
+            }
+            if ($state['first'] !== null) {
+                $store->add("{$key}:first", $state['first'], self::DAY);
+            }
+            if ($since !== null) {
+                $store->put("{$key}:since", $since, self::DAY);
             }
         });
     }
@@ -247,7 +271,8 @@ final class Throttle
     }
 
     /**
-     * 一時フォルダは誰でも書ける場所なので、フォルダが自分の物で書き込めるときだけ使う。
+     * 一時フォルダは誰でも書ける場所なので、フォルダが自分の物で書き込めるときだけ使う。「自分」はプロセスの実効の利用者
+     * （getmyuid() はスクリプトのファイルの持ち主なので、デプロイの利用者と PHP-FPM の利用者が違うと外れる）。
      * ファイルは持ち主だけが読み書きでき（0600）、中身からクラスを復元しない（置き場の中身は整数と配列だけ）
      */
     private function fileStore(): Cache
@@ -257,7 +282,7 @@ final class Throttle
             @mkdir($directory, 0700, true);
         }
         clearstatcache(true, $directory);
-        if (! is_dir($directory) || ! is_writable($directory) || fileowner($directory) !== getmyuid()) {
+        if (! is_dir($directory) || ! is_writable($directory) || fileowner($directory) !== (function_exists('posix_geteuid') ? posix_geteuid() : getmyuid())) {
             throw new \RuntimeException('予備の一時フォルダが自分の物でないか、書き込めない');
         }
 

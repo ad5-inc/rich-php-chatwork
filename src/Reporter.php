@@ -207,7 +207,7 @@ final class Reporter
         }
 
         if (! $this->throttle->slot(Settings::positive($this->config, 'max_per_minute', 20))) {
-            $this->throttle->release($key, $state['count']);
+            $this->throttle->release($key, $state, false);
             $this->throttle->overflow($key, $name, $label === '同じ知らせ');
 
             return;
@@ -231,7 +231,7 @@ final class Reporter
             }
             $this->transport->send($token, $room, $body);
         } catch (Throwable $sendError) {
-            $this->throttle->release($key, $state['count']);
+            $this->throttle->release($key, $state, true);
             $this->throttle->restoreOverflow($overflow);
 
             throw $sendError;
@@ -288,13 +288,12 @@ final class Reporter
     }
 
     /**
-     * 本文が 30,000 文字を超えたときに替える知らせ。件名の要約は残し、組み立ての失敗と言い分ける
+     * 本文が 30,000 文字を超えたときに替える知らせ。件名は普通の件名のまま、本文の 1 行目で組み立ての失敗と言い分ける
      *
      * @param array<mixed> $extra
      */
     private function oversized(?Throwable $e, array $extra, string $noticeTitle = ''): string
     {
-        $suffix = '（長すぎて省いた。ログを見る）';
         try {
             if ($e === null) {
                 $head = Text::field($this->expand('notice_title', '{app}（{env}）') . '知らせ: ' . $noticeTitle, false, null, self::TITLE_WIDTH);
@@ -306,8 +305,10 @@ final class Reporter
             $head = $e === null ? '知らせ' : Text::escape(new Names($this->source)->short($e::class), false);
         }
 
-        return '[info][title]' . Text::cut($head, self::TITLE_WIDTH - mb_strwidth($suffix)) . $suffix . '[/title]'
-            . $this->shortBody($e, $extra) . '[/info]';
+        // 件名は普通の件名と同じ（要約の後ろから切る）。長さで替えたことは本文の 1 行目に書く
+        $rest = $this->shortBody($e, $extra);
+
+        return '[info][title]' . $head . '[/title]長すぎて省いた（ログを見る）' . ($rest === '' ? '' : "\n{$rest}") . '[/info]';
     }
 
     /**
@@ -547,16 +548,19 @@ final class Reporter
     /**
      * 「同じ例外: 前の知らせ（14:02）の後の 60 秒に、送らずに 2 回。上限で送らなかった 3 回（14:05 から）」。どちらも 0 回なら出さない
      *
-     * @param array{count: int, last: ?int} $state
+     * @param array{count: int, last: ?int, first: ?int, since: ?int} $state
      */
     private function repeatLine(string $label, array $state, int $seconds, int $overflowed, ?int $overflowedSince): ?string
     {
         $parts = [];
         if ($state['count'] > 0) {
-            // 前の知らせの時刻が分からなければ、無い知らせを書かない
-            $parts[] = $state['last'] === null
-                ? "送らずに {$state['count']} 回"
-                : '前の知らせ（' . $this->clock($state['last']) . '）の後の ' . self::duration($seconds) . "に、送らずに {$state['count']} 回";
+            $parts[] = match (true) {
+                // 送れなかった間は、前の知らせの後の窓と合わないので、数え始めた時刻から書く
+                $state['since'] !== null => $this->clock($state['since']) . " から、送らずに {$state['count']} 回（送れなかった分を含む）",
+                // 前の知らせの時刻が分からなければ、無い知らせを書かない
+                $state['last'] === null => "送らずに {$state['count']} 回",
+                default => '前の知らせ（' . $this->clock($state['last']) . '）の後の ' . self::duration($seconds) . "に、送らずに {$state['count']} 回",
+            };
         }
         if ($overflowed > 0) {
             $parts[] = "上限で送らなかった {$overflowed} 回" . ($overflowedSince === null ? '' : '（' . $this->clock($overflowedSince) . ' から）');
