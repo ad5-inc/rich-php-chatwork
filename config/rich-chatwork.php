@@ -44,6 +44,10 @@ return [
     // 同じ例外（アプリの行・クラス・SQLSTATE が同じ）を送り直すまでの秒数
     'throttle_seconds' => 60,
 
+    // 部品の全体で 1 分に送る件数の上限（例外と notice を合わせて）。Chatwork の API の上限を超えてまとめて消えないようにする。
+    // 超えた分は短いクラス名ごとに数え、次に送る知らせに多い順に 3 つまで足す
+    'max_per_minute' => 20,
+
     // 例外ではない知らせ（Reporter::notice()）の件名の頭。{app}・{env} は件名と同じ。続けて「知らせ: 」と notice() の $title が付く
     'notice_title' => '{app}（{env}）',
 
