@@ -39,7 +39,7 @@ final class JobEntrance
     /** @var WeakMap<Throwable, array{label: string, id: string, origin: ?string, sync: bool}> */
     private WeakMap $captured;
 
-    /** 動いているコマンドの深さ。要求の中の Artisan::call の終わりで、残した ID を戻さないため */
+    /** 動いているコマンドの深さ。コマンドの中の Artisan::call の終わりで、残した ID を戻さないため（HTTP の中の物は RequestHandled に任せる） */
     private int $commands = 0;
 
     /** 前の JobProcessing の後に Laravel が Context を入れ替えた（ContextHydrated） */
@@ -158,12 +158,12 @@ final class JobEntrance
     }
 
     /**
-     * 一番外のコマンドの終わりでだけ、残した ID を戻す
+     * 一番外のコマンドの終わりでだけ、残した ID を戻す。HTTP の中の Artisan::call では戻さない（$console が false）
      */
-    public function commandFinished(): void
+    public function commandFinished(bool $console): void
     {
         $this->commands = max(0, $this->commands - 1);
-        if ($this->commands === 0) {
+        if ($console && $this->commands === 0) {
             $this->ending();
         }
     }
@@ -239,8 +239,9 @@ final class JobEntrance
             return $entry;
         }
 
-        // 動いている最中の段だけ。失敗して残した段（戻すのを待っている物）は、もう入口ではない（受け止めた後の別の例外はコマンド・HTTP で出す）
-        $running = array_filter($this->stack, static fn (array $frame): bool => ! $frame['failed']);
+        // sync で失敗して残した段（入口の終わりを待っている物）は、もう入口ではない（受け止めた後の別の例外はコマンド・HTTP で出す）
+        // ワーカーで失敗した直後の段（failed）は入口に使う（failed() の中・JobFailed のリスナーで記録した別の例外）
+        $running = array_filter($this->stack, static fn (array $frame): bool => ! $frame['lingering']);
         $top = end($running);
 
         // 動いている最中のジョブの中で report() したなら、呼び出し側で記録されたのではない

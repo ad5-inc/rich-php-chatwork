@@ -7,6 +7,7 @@ namespace Ad5\RichPhpChatwork;
 use ErrorException;
 use Exception;
 use Google\Service\Exception as GoogleServiceException;
+use GuzzleHttp\Exception\BadResponseException;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -143,6 +144,8 @@ final class Details
         $status = match (true) {
             $e instanceof GoogleServiceException => $e->getCode(),
             $e instanceof RequestException => $e->response->status(),
+            // Laravel の Http を通さない素の Guzzle の失敗（4xx・5xx の応答）。Guzzle が無い環境では当たらない
+            class_exists(BadResponseException::class) && $e instanceof BadResponseException => $e->getResponse()->getStatusCode(),
             default => null,
         };
         if (in_array($status, [null, 0], true)) {

@@ -205,8 +205,8 @@ final class RichChatworkServiceProvider extends ServiceProvider
         $events->listen(CommandStarting::class, static function () use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->commandStarting());
         });
-        $events->listen(CommandFinished::class, static function () use ($entrance, $safely): void {
-            $safely(static fn () => $entrance()->commandFinished());
+        $events->listen(CommandFinished::class, function () use ($entrance, $safely): void {
+            $safely(fn () => $entrance()->commandFinished($this->app->runningInConsole()));
         });
         $events->listen(RequestHandled::class, static function () use ($entrance, $safely): void {
             $safely(static fn () => $entrance()->ending());
