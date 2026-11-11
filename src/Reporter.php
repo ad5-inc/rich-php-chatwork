@@ -456,7 +456,9 @@ final class Reporter
         }
 
         // 値の書き出しを含む文言は伏せずに省く。目印の改行を残すよう、[code] の中の形で文字を直してから見る
-        $scrubbed = Text::scrub($main->getMessage(), true);
+        // 末尾の空白と改行は落とす（"…\n" で終わる文言を複数行とみなさない）
+        $message = rtrim($main->getMessage());
+        $scrubbed = Text::scrub($message, true);
         $redact = fn (string $text): ?string => $redactor->message($this->source->relativeIn($text));
         if ($scrubbed !== null && Redactor::containsDump($scrubbed)) {
             // 目印が改行だけなら、1 行目は普通の文として伏せて出す
@@ -467,7 +469,7 @@ final class Reporter
                 : Text::field($first, true, $redact, $width) . '（2 行目から先は省いた）';
         }
 
-        return Text::field($main->getMessage(), true, $redact, $width);
+        return Text::field($message, true, $redact, $width);
     }
 
     /**

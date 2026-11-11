@@ -8,7 +8,8 @@ namespace Ad5\RichPhpChatwork;
  * 値を伏せる規則。どれも失敗したら null を返し、呼ぶ側は項目ごと省く（元の値には戻さない）
  *
  * 規則の順番には意味がある。URL の利用者情報と問い合わせ（5・6）をキーと値（8）より先に当てないと、
- * `?token=x` の後ろが URL の外まで伸びる。長い英数字（9）は最後に当て、ほかの規則の印を壊さない
+ * `?token=x` の後ろが URL の外まで伸びる。URL のパスの段の許可リストはキーと値（8）の後に当てる
+ * （先に {…} にすると、引用符の無い値が } で止まる）。長い英数字（9）は最後に当て、ほかの規則の印を壊さない
  */
 final class Redactor
 {
@@ -46,7 +47,7 @@ final class Redactor
      * print_r（[password] => x）・角括弧のキー（user[password]=x、http_build_query の %5D）・何重にもエスケープした JSON
      * （\"password\":・\\\"password\\\":）・リストの添字（password[0]=・token[]=・tokens%5B0%5D=）のため、角括弧と \ の繰り返しを許す
      */
-    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*(?:(?:\]|%5D)|(?:\[|%5B)[^\]=&%]*(?:\]|%5D))*(?:\\\\)*[\'"]?\s*(?:=>|=|:|：)\s*)';
+    private const KEY = '((?:' . self::KEY_WORDS . ')[A-Za-z0-9_-]*(?:(?:\]|%5D)|(?:\[|%5B)[^\]=&%]*(?:\]|%5D))*(?:\\\\)*[\'"]?\s*(?:=>|=|:|：|%3D|%3A)\s*)';
 
     /**
      * 全角を揃えると値の区切りになる文字。揃える前に私用の文字へ逃がし、値の中として扱う（hun，ter2 の ter2 を残さない）。伏せた後に戻す
@@ -127,17 +128,13 @@ final class Redactor
         foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), self::japaneseKey()] as [$pattern, $replacement]) {
             $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         }
-        // スキームのある URL のパスは、段ごとの許可リストに通す（Guzzle の文言・file_get_contents の警告の Webhook の秘密）
-        $text = $text === null ? null : Text::replace(
-            '/(\b[a-z][a-z0-9+.\-]*:\/\/[^\s\/?#"\'<>()]+)(\/[^\s?#"\'<>()]*)/iu',
-            static fn (array $match): string => $match[1] . UrlPath::redact($match[2]),
-            $text,
-        );
         // 値が配列・serialize の物は、キーと値の規則（行末までしか見ない）より先に、閉じ括弧・長さの所まで伏せる
         $text = $text === null ? null : $this->arrayValues($text);
         $text = $text === null ? null : $this->serialized($text);
         [$pattern, $replacement] = $this->keyValue(false);
         $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
+        // URL のパスはキーと値の後に当てる。先に {…} にすると、引用符の無い値が } で止まり、値の後ろが残る
+        $text = $text === null ? null : $this->urlPaths($text);
         $text = $text === null ? null : $this->longAlnum($text);
 
         foreach ($this->extraPatterns as $pattern) {
@@ -204,6 +201,33 @@ final class Redactor
 
         // mb_convert_kana の a は ＂ ＇ ＼ を揃えない
         return strtr(mb_convert_kana($text, 'KVas', 'UTF-8'), ['＂' => '"', '＇' => "'", '＼' => '\\']);
+    }
+
+    /**
+     * URL のパスを段ごとの許可リストに通す（Guzzle の文言・file_get_contents の警告の Webhook の秘密）。
+     * スキームのある URL、\/ でエスケープした URL、ホストの形（hooks.slack.com/…）で始まるスキームの無い URL。
+     * パスは ASCII の文字だけ（日本語・全角の句読点・` の手前で止める）で、終わりの . , : ; は含めない
+     */
+    private function urlPaths(string $text): ?string
+    {
+        $path = '[^\x00-\x20?#"\'<>()`\x7F-\x{10FFFF}]*';
+        $redact = self::redactPath(...);
+
+        // /i は付けない（\x7F 以上の範囲が大文字小文字の同一視で s・k に当たり、パスが途中で止まる）
+        $text = Text::replace('/(\b[A-Za-z][A-Za-z0-9+.\-]*:(?:\/\/|\\\\\/\\\\\/)[^\s\/\\\\?#"\'<>()`]+)((?:\/|\\\\\/)' . $path . ')/u', $redact, $text);
+
+        return $text === null ? null : Text::replace('/(?<![A-Za-z0-9.\-\/@:\\\\])((?:[a-z0-9\-]+\.)+[a-z]{2,})(\/' . $path . ')/u', $redact, $text);
+    }
+
+    /**
+     * @param array<array-key, string> $match 1 がスキームとホスト、2 がパス
+     */
+    private static function redactPath(array $match): string
+    {
+        $path = rtrim($match[2], '.,:;');
+        $separator = str_contains($path, '\\/') ? '\\/' : '/';
+
+        return $match[1] . UrlPath::redact($path, $separator) . substr($match[2], strlen($path));
     }
 
     /**
@@ -331,6 +355,8 @@ final class Redactor
             ['/(?<![A-Za-z0-9_\-])(?:\(?0[1-9]|\+81' . self::PHONE_SEPARATOR . '*(?:\(0\))?' . self::PHONE_SEPARATOR . '*\(?[1-9])(?:' . self::PHONE_SEPARATOR . '*[0-9]){8,9}(?![A-Za-z0-9_\-])/u', self::MARK],
             // クレジットカード（4 桁×4）。12 桁の規則より先に当て、16 桁の中の 12 桁だけが伏せられないようにする
             ['/(?<![A-Za-z0-9_\-])[0-9]{4}(?:' . self::PHONE_SEPARATOR . '?[0-9]{4}){3}(?![A-Za-z0-9_\-])/u', self::MARK],
+            // Amex（4-6-5）・Diners（4-6-4）
+            ['/(?<![A-Za-z0-9_\-])[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{6}' . self::PHONE_SEPARATOR . '?[0-9]{4,5}(?![A-Za-z0-9_\-])/u', self::MARK],
             ['/(?<![A-Za-z0-9_\-])[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}(?![A-Za-z0-9_\-])/u', self::MARK],
             ['/((?:口座|account).{0,20}?)(?<![0-9])[0-9]{7}(?![0-9])/iu', '$1' . self::MARK],
         ];
