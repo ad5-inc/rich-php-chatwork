@@ -79,6 +79,11 @@ final class Details
 
     public static function of(Throwable $e): Kind
     {
+        $process = ProcessFailure::of($e);
+        if ($process !== null) {
+            return new Kind($process->summary, $process->items);
+        }
+
         return match (true) {
             $e instanceof QueryException => self::query($e),
             $e instanceof ErrorException => self::severity($e),

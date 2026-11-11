@@ -101,6 +101,11 @@ final class Redactor
      */
     public static function firstLineOfPlainText(string $text): ?string
     {
+        // ほかの例外が Process の文言（1 行目にコマンドライン）を写した物。1 行目にパスワードの引数が入りうる
+        if (str_starts_with($text, 'The command "') || str_starts_with($text, 'The process "')) {
+            return null;
+        }
+
         $normalized = self::normalize($text);
         $others = array_filter(self::DUMP_MARKERS, static fn (string $pattern): bool => $pattern !== '/\n/');
         if (array_any($others, static fn (string $pattern): bool => preg_match($pattern, $normalized) !== 0)) {

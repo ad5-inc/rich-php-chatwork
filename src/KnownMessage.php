@@ -16,7 +16,8 @@ use Throwable;
 /**
  * 形の分かる例外の文言。部品が安全な部品だけで組み立て直し、元の文言は使わない
  *
- * QueryException の文言は値を埋めた SQL と接続先（Host・Port・Database）を、RequestException の文言は応答の本文を含む。
+ * QueryException の文言は値を埋めた SQL と接続先（Host・Port・Database）を、RequestException の文言は応答の本文を、
+ * プロセスの例外の文言はコマンドライン（パスワード・トークンの引数）を含む。
  * 組み立てに失敗しても元の文言には戻さず、FAILED を返す
  */
 final class KnownMessage
@@ -36,7 +37,7 @@ final class KnownMessage
                 $e instanceof QueryException => self::query($e),
                 $e instanceof RequestException => self::request($e),
                 $e instanceof ConnectionException => self::connection($e),
-                default => null,
+                default => ProcessFailure::of($e)?->message,
             };
         } catch (Throwable) {
             return self::FAILED;
