@@ -30,12 +30,16 @@ final class Redactor
         '/\b[Aa]rray\s*\(|\w+ Object\s*\(|::__set_state/', // print_r・var_export
         '/\{"|\["|\\\\"/',                // JSON とエスケープした JSON
         '/%5[BD]/i',                      // http_build_query の角括弧
+        '/%7B%22|%5B%22|%22%3A/i',        // URL エンコードした JSON
     ];
+
+    /** 1 行目がこれなら、改行のほかに目印が無くても書き出しの頭とみなす（JSON_PRETTY_PRINT・print_r・var_export の 1 行目） */
+    private const DUMP_FIRST_LINE = '/\A\s*[\[{(]|(?:[\[{(]|\bArray|\barray|\bObject)\s*\z/';
 
     private const JAPANESE_KEY_WORDS = 'パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム';
 
-    /** pass(?![a-z]) は db_pass・smtp_pass に当て、passed・passenger には当てない（password は先の語で当たる） */
-    private const KEY_WORDS = 'password|passwd|pwd|passphrase|passcode|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
+    /** pass(?![a-z])・pw(?![a-z]) は db_pass・smtp_pass・pw= に当て、passed・passenger・pwned には当てない（password・pwd は先の語で当たる） */
+    private const KEY_WORDS = 'password|passwd|pwd|pw(?![a-z])|passphrase|passcode|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|' . self::JAPANESE_KEY_WORDS;
 
     /**
      * キーの後ろの区切り。語の前に境界は求めず（remember_token・XSRF-TOKEN）、語の後ろの続き（password_confirmation）は許す。
@@ -92,6 +96,23 @@ final class Redactor
     }
 
     /**
+     * 書き出しの目印に当たったのが改行だけで、1 行目が書き出しの頭でもなければ、その 1 行目。違えば null。
+     * Carbon の書式の失敗・Symfony Console の名前の誤り・SMTP の応答のように、1 行目だけで読める文言のため
+     */
+    public static function firstLineOfPlainText(string $text): ?string
+    {
+        $normalized = self::normalize($text);
+        $others = array_filter(self::DUMP_MARKERS, static fn (string $pattern): bool => $pattern !== '/\n/');
+        if (array_any($others, static fn (string $pattern): bool => preg_match($pattern, $normalized) !== 0)) {
+            return null;
+        }
+
+        $first = rtrim(explode("\n", $text, 2)[0]);
+
+        return $first === '' || preg_match(self::DUMP_FIRST_LINE, self::normalize($first)) !== 0 ? null : $first;
+    }
+
+    /**
      * 形の分からない例外の文言・notice の行と枠。文言と notice の行は、先に containsDump() で書き出しを省いてから通す
      */
     public function message(string $text): ?string
@@ -101,6 +122,12 @@ final class Redactor
         foreach ([...$this->shapes(true), ...self::personal(), ...self::KEY_SHAPES, self::authorization(), self::japaneseKey()] as [$pattern, $replacement]) {
             $text = $text === null ? null : Text::replace($pattern, $replacement, $text);
         }
+        // スキームのある URL のパスは、段ごとの許可リストに通す（Guzzle の文言・file_get_contents の警告の Webhook の秘密）
+        $text = $text === null ? null : Text::replace(
+            '/(\b[a-z][a-z0-9+.\-]*:\/\/[^\s\/?#"\'<>()]+)(\/[^\s?#"\'<>()]*)/iu',
+            static fn (array $match): string => $match[1] . UrlPath::redact($match[2]),
+            $text,
+        );
         // 値が配列・serialize の物は、キーと値の規則（行末までしか見ない）より先に、閉じ括弧・長さの所まで伏せる
         $text = $text === null ? null : $this->arrayValues($text);
         $text = $text === null ? null : $this->serialized($text);
@@ -297,6 +324,8 @@ final class Redactor
         return [
             // 0[1-9] に絞り、0 埋めの社員コード（0012345678 など）は残す。+81 は頭の 0 の代わり
             ['/(?<![A-Za-z0-9_\-])(?:\(?0[1-9]|\+81' . self::PHONE_SEPARATOR . '*(?:\(0\))?' . self::PHONE_SEPARATOR . '*\(?[1-9])(?:' . self::PHONE_SEPARATOR . '*[0-9]){8,9}(?![A-Za-z0-9_\-])/u', self::MARK],
+            // クレジットカード（4 桁×4）。12 桁の規則より先に当て、16 桁の中の 12 桁だけが伏せられないようにする
+            ['/(?<![A-Za-z0-9_\-])[0-9]{4}(?:' . self::PHONE_SEPARATOR . '?[0-9]{4}){3}(?![A-Za-z0-9_\-])/u', self::MARK],
             ['/(?<![A-Za-z0-9_\-])[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}' . self::PHONE_SEPARATOR . '?[0-9]{4}(?![A-Za-z0-9_\-])/u', self::MARK],
             ['/((?:口座|account).{0,20}?)(?<![0-9])[0-9]{7}(?![0-9])/iu', '$1' . self::MARK],
         ];

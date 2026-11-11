@@ -26,9 +26,6 @@ final class KnownMessage
     /** ドライバー 2002 のうち、名前が引けないときの文言の手がかり（文言は出さず、言葉を選ぶためだけに読む） */
     private const NAME_LOOKUP = '/getaddrinfo|php_network_getaddresses|Name or service not known|nodename nor servname|Temporary failure in name resolution/i';
 
-    /** URL のパスで残す段。ほかの段（ID・トークン・Webhook の秘密）は {…} にする */
-    private const PATH_SEGMENTS = ['/\A[a-z][a-z_-]{0,30}\z/', '/\Av\d{1,2}\z/'];
-
     /**
      * 形の分かる例外なら組み立てた文言、それ以外は null
      */
@@ -97,7 +94,7 @@ final class KnownMessage
             return "HTTP {$status}";
         }
 
-        return "HTTP {$status} {$method} {$origin}" . self::path($uri->getPath());
+        return "HTTP {$status} {$method} {$origin}" . UrlPath::redact($uri->getPath());
     }
 
     private static function connection(ConnectionException $e): string
@@ -121,15 +118,5 @@ final class KnownMessage
         return preg_match('/\A[a-z][a-z0-9+.\-]{0,15}\z/', $scheme) === 1 && preg_match('/\A[A-Za-z0-9.\-]{1,253}\z/', $host) === 1
             ? "{$scheme}://{$host}"
             : null;
-    }
-
-    private static function path(string $path): string
-    {
-        $segments = array_map(
-            static fn (string $segment): string => $segment === '' || array_any(self::PATH_SEGMENTS, static fn (string $pattern): bool => preg_match($pattern, $segment) === 1) ? $segment : '{…}',
-            explode('/', $path),
-        );
-
-        return implode('/', $segments);
     }
 }

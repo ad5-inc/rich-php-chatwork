@@ -457,11 +457,17 @@ final class Reporter
 
         // 値の書き出しを含む文言は伏せずに省く。目印の改行を残すよう、[code] の中の形で文字を直してから見る
         $scrubbed = Text::scrub($main->getMessage(), true);
+        $redact = fn (string $text): ?string => $redactor->message($this->source->relativeIn($text));
         if ($scrubbed !== null && Redactor::containsDump($scrubbed)) {
-            return Text::field(Redactor::DUMP_OMITTED, true, null, $width);
+            // 目印が改行だけなら、1 行目は普通の文として伏せて出す
+            $first = Redactor::firstLineOfPlainText($scrubbed);
+
+            return $first === null
+                ? Text::field(Redactor::DUMP_OMITTED, true, null, $width)
+                : Text::field($first, true, $redact, $width) . '（2 行目から先は省いた）';
         }
 
-        return Text::field($main->getMessage(), true, fn (string $text): ?string => $redactor->message($this->source->relativeIn($text)), $width);
+        return Text::field($main->getMessage(), true, $redact, $width);
     }
 
     /**

@@ -130,7 +130,6 @@ final class ReporterTest extends TestCase
         yield 'エスケープした JSON' => ['payload "{\"pin\":\"probe-pw-11\"}"', ['probe-pw-11']];
         yield '=> の書き出し' => ["values 'pin' => 'probe-pw-12'", ['probe-pw-12']];
         yield 'URL の角括弧' => ['query a%5Bpin%5D=probe-pw-13', ['probe-pw-13']];
-        yield '複数行' => ["first line\npin probe-pw-14", ['probe-pw-14']];
         yield 'serialize の配列' => ['probe a:1:{i:0;s:11:"probe-pw-15";}', ['probe-pw-15']];
         yield '全角で書いた JSON' => ['payload ｛＂pin＂:＂probe-pw-16＂｝', ['probe-pw-16']];
         yield 'URL エンコードした JSON' => ['body=%7B%22pin%22%3A%22probe-pw-18%22%7D', ['probe-pw-18']];
@@ -185,6 +184,7 @@ final class ReporterTest extends TestCase
      */
     public static function multiLine(): iterable
     {
+        yield '2 行目の値' => ["first line\npin probe-pw-14", 'first line'];
         yield 'Carbon の書式の失敗' => ["Unexpected data found.\nTrailing data", 'Unexpected data found.'];
         yield 'Symfony Console の名前の誤り' => ["Command \"report:dail\" is not defined.\n\nDid you mean this?\n    report:daily", 'Command "report:dail" is not defined.'];
         yield 'SMTP の 2 行の応答' => ["Expected response code \"250\" but got code \"550\", with message \"550-5.1.1 The account does not exist.\r\n550 5.1.1 Please check probe-user@example.test\"", 'Expected response code "250" but got code "550", with message "550-5.1.1 The account does not exist.'];
@@ -200,6 +200,7 @@ final class ReporterTest extends TestCase
 
         $this->assertStringContainsString('[/title][code]' . $first . '（2 行目から先は省いた）[/code]', $body);
         $this->assertStringNotContainsString('probe-user', $body);
+        $this->assertStringNotContainsString('probe-pw', $body);
     }
 
     #[Test]
