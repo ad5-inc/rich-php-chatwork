@@ -460,7 +460,11 @@ final class Reporter
         $message = rtrim($main->getMessage());
         $scrubbed = Text::scrub($message, true);
         $redact = fn (string $text): ?string => $redactor->message($this->source->relativeIn($text));
-        if ($scrubbed !== null && Redactor::containsDump($scrubbed)) {
+        $omission = $scrubbed === null ? null : Redactor::omission($scrubbed);
+        if ($omission === Redactor::COMMAND_OMITTED) {
+            return Text::field($omission, true, null, $width);
+        }
+        if ($scrubbed !== null && $omission !== null) {
             // 目印が改行だけなら、1 行目は普通の文として伏せて出す
             $first = Redactor::firstLineOfPlainText($scrubbed);
 
@@ -617,9 +621,8 @@ final class Reporter
             // 地の文の行は、値の書き出しを含むなら行ごと省く（枠の中身は使う側が出す形を決めるので、伏せるだけにする）
             $scrubbed = Text::scrub($line, true);
 
-            return $scrubbed !== null && Redactor::containsDump($scrubbed)
-                ? Redactor::DUMP_OMITTED
-                : Text::field($line, false, $redactor->message(...), self::LINE_WIDTH);
+            return ($scrubbed === null ? null : Redactor::omission($scrubbed))
+                ?? Text::field($line, false, $redactor->message(...), self::LINE_WIDTH);
         }, $lines);
         $codeLines = $code === null ? null : array_map(
             static fn (string $line): string => Text::field($line, true, $redactor->message(...), self::LINE_WIDTH),

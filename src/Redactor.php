@@ -32,8 +32,16 @@ final class Redactor
         '/\{"|\["|\\\\"/',                // JSON とエスケープした JSON
         '/%5[BD]/i',                      // http_build_query の角括弧
         '/%7B%22|%5B%22|%22%3A/i',        // URL エンコードした JSON
-        '/\bThe (?:command|process) "/',  // 写したプロセスの文言（コマンドラインに -p の後ろのパスワードなどが入る）
     ];
+
+    public const COMMAND_OMITTED = '（コマンドラインを含むので省いた。ログを見る）';
+
+    /**
+     * 写したプロセスの文言（Laravel・Symfony の Process の失敗・時間切れ・起動の失敗）。コマンドラインに -p の後ろのパスワードなどが入る。
+     * 文言の形だけに絞り（The command "x" does not exist. などの artisan の文言は省かない）、大文字小文字は区別しない。
+     * 引用符の中は行の終わりまで最長で取る（Process::fromShellCommandline のコマンドラインは " を含みうる）
+     */
+    private const PROCESS_MESSAGE = '/\bThe (?:command|process) "[^\n]*" (?:failed\.|exceeded the (?:idle )?timeout)/i';
 
     /** 1 行目がこれなら、改行のほかに目印が無くても書き出しの頭とみなす（JSON_PRETTY_PRINT・print_r・var_export の 1 行目） */
     private const DUMP_FIRST_LINE = '/\A\s*[\[{(]|(?:[\[{(]|\bArray|\barray|\bObject)\s*\z/';
@@ -90,6 +98,18 @@ final class Redactor
     /**
      * 値の書き出しの形を含むか。全角を揃えてから見る（｛＂ も JSON とみなす）
      */
+    /**
+     * 文言・notice の行を省く理由。コマンドラインを含む（写したプロセスの文言）・値の書き出しを含む・どちらでもない（null）
+     */
+    public static function omission(string $text): ?string
+    {
+        if (preg_match(self::PROCESS_MESSAGE, self::normalize($text)) !== 0) {
+            return self::COMMAND_OMITTED;
+        }
+
+        return self::containsDump($text) ? self::DUMP_OMITTED : null;
+    }
+
     public static function containsDump(string $text): bool
     {
         $normalized = self::normalize($text);
@@ -203,19 +223,20 @@ final class Redactor
     /**
      * URL のパスを段ごとの許可リストに通す（Guzzle の文言・file_get_contents の警告の Webhook の秘密）。
      * スキームのある URL、\/ でエスケープした URL、ホストの形（hooks.slack.com/…）で始まるスキームの無い URL。
-     * パスは ASCII の文字だけ（日本語・全角の句読点・`・] の手前で止める）で、終わりの . , : ; ! は含めない
+     * パスは ASCII の文字だけ（日本語・全角の句読点・` の手前で止める）で、終わりの . , : ; ! ] は含めない
      */
     private function urlPaths(string $text): ?string
     {
-        $path = '[^\x00-\x20?#"\'<>()`\]\x7F-\x{10FFFF}]*';
+        $path = '[^\x00-\x20?#"\'<>()`\x7F-\x{10FFFF}]*';
         $redact = self::redactPath(...);
 
         // /i は付けない（\x7F 以上の範囲が大文字小文字の同一視で s・k に当たり、パスが途中で止まる）
         $text = Text::replace('/(\b[A-Za-z][A-Za-z0-9+.\-]*:(?:\/\/|\\\\\/\\\\\/)[^\s\/\\\\?#"\'<>()`]+)((?:\/|\\\\\/)' . $path . ')/u', $redact, $text);
 
-        // スキームの無い URL。// の直後（//host/…）は当て、1 つの / の後ろ（ファイルのパスの途中）と、上で済ませたスキームのある URL は外す。ポートを許す。
+        // スキームの無い URL。// と \/\/ の直後（//host/…）は当て、1 つの / の後ろ（ファイルのパスの途中）と、上で済ませたスキームのある URL は外す。
+        // ホストの後ろは / と \/ のどちらも受ける。ポートを許す。
         // lodash.merge/index.js のようなファイルのパスにも当たるが、伏せすぎる側として受け入れる
-        return $text === null ? null : Text::replace('/(?<![A-Za-z0-9.\-@:\\\\])(?<![^\/]\/)(?<!^\/)(?<!:\/\/)(?<!:\\\\\/\\\\\/)((?:[a-z0-9\-]+\.)+[a-z]{2,}(?::\d{1,5})?)(\/' . $path . ')/u', $redact, $text);
+        return $text === null ? null : Text::replace('/(?:(?<=\/\/)|(?<=\\\\\/\\\\\/)|(?<![A-Za-z0-9.\-@:\\\\\/]))(?<!:\/\/)(?<!:\\\\\/\\\\\/)((?:[a-z0-9\-]+\.)+[a-z]{2,}(?::\d{1,5})?)((?:\/|\\\\\/)' . $path . ')/u', $redact, $text);
     }
 
     /**
@@ -223,7 +244,8 @@ final class Redactor
      */
     private static function redactPath(array $match): string
     {
-        $path = rtrim($match[2], '.,:;!');
+        // 終わりの ] は [https://…] の閉じ括弧として残す（途中の ] はパスの中）
+        $path = rtrim($match[2], '.,:;!]');
 
         return $match[1] . UrlPath::redact($path) . substr($match[2], strlen($path));
     }
