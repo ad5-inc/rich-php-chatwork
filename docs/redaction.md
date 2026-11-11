@@ -21,6 +21,9 @@
 | `Array (`・`… Object (`・`array (`・`::__set_state` | print_r・var_export |
 | `{"`・`["`・`\"` | JSON とエスケープした JSON |
 | `%5B`・`%5D` | http_build_query の角括弧 |
+| `%7B%22`・`%5B%22`・`%22%3A` | URL エンコードした JSON |
+
+当たった目印が改行だけで、1 行目が書き出しの頭（`{`・`[`・`(` で始まる・終わる、`Array`・`array`・`Object` で終わる）でもなければ、1 行目だけを下の規則で伏せて出し、「（2 行目から先は省いた）」を添える（Carbon の書式の失敗・Symfony Console の名前の誤り・SMTP の 2 行の応答のように、1 行目で読める文言のため）。notice の行は行ごとの判定なので、この扱いは無い。
 
 省くかどうかは `tests/ReporterTest.php` の表で固定している（省く例: オブジェクトの書き出し・serialize の protected / private・長さのずれ・閉じ括弧の数え方。省かない例: `CSRF token mismatch.`・`Undefined array key "name"`・`Call to undefined method App\X::y()`・`in_array(): …`）。下の伏せる規則は、省かなかった 1 行の文と notice の枠に当てる。
 
@@ -47,9 +50,9 @@
 | 3 | パスワードのハッシュ（`$2y$…`・`$argon2id$…`） | `hash （伏せた）` | — |
 | 4 | `Bearer …`・`Basic …` | `Bearer （伏せた）` | — |
 | 5 | URL の利用者情報 | `https://（伏せた）@host.example/x` | `https://host.example/x` |
-| 6 | URL・パスの `?` 以降 | `GET /api/x?（伏せた）` | 前後のコードの `'/api/x?page=1'` |
+| 6 | URL・パスの `?` 以降。スキームのある URL のパスは段ごとの許可リスト（英小文字の段と `v1` のような段だけ残し、ほかは `{…}`。組み立て直す HTTP の文言と同じ `UrlPath`） | `GET /api/x?（伏せた）`・`for https://hooks.slack.com/services/{…}/{…}/{…}`・`file_get_contents(https://discord.com/api/webhooks/{…}/{…})` | 前後のコードの `'/api/x?page=1'`・`https://host.example/x` |
 | 7 | メールアドレス（`@` の代わりの `%40` も） | `to （伏せた） failed` | リクエストの中（規則 6 だけ） |
-| 7b | 電話番号（`0[1-9]` か `+81` で始まる 10〜11 桁）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`０３－１２３４－５６７８`・`+81 90-1234-5678`・`(03)1234-5678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・`0012345678` のような 0 埋めの番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
+| 7b | 電話番号（`0[1-9]` か `+81` で始まる 10〜11 桁）・クレジットカード（4 桁×4。12 桁の規則より先）・マイナンバー（12 桁）・`口座`・`account` の後ろ 20 文字までの 7 桁 | `03-1234-5678`・`０３－１２３４－５６７８`・`+81 90-1234-5678`・`(03)1234-5678`・`1234 5678 9012`・`口座番号: 1234567` | SQLSTATE `22001`・HTTP `503`・行番号・`0012345678` のような 0 埋めの番号・UUID の最後の 12 桁・ファイル名の中の数字・前後のコード |
 | 8 | キーと値（`Authorization` は方式ごと） | `{"password":（伏せた）}`・`'password' => （伏せた）`・`$secret = （伏せた）`・`XSRF-TOKEN=（伏せた）`・`[password] => （伏せた）`（print_r）・`user[password]=（伏せた）`・`{\"password\":（伏せた）}`（エスケープした JSON）・`Authorization: （伏せた）, rest`・`暗証番号: （伏せた）`・`パスワードは （伏せた） です`・`確認コード「（伏せた）」` | `CSRF token mismatch.`・`The token field is required.`・前後のコードの `$request->password` |
 | 9 | 長い英数字 | 32 文字以上の 16 進・base64 のトークン・`session_{40 文字の 16 進}`・文の終わりが `.` のトークン | 長い snake_case・長いクラス名・UUID・`storage/app/{32 文字}.pdf` |
 | 10 | 使う側の `message_redact_patterns` | 当たった所 | — |
@@ -59,10 +62,10 @@
 - **\u を戻す**: 伏せる前に JSON の `\uXXXX`（サロゲートの組も）を戻す（`json_encode` した「パスワード」のキーに当てるため。本文も戻した形で出る。制御文字・`"`・`\` は戻さない）
 - **全角を揃える**: 伏せる前に NFKC で揃える（`０３－…`・`＠`・`：` が半角になり、本文もその形で出る）。intl の `Normalizer` が無い環境では `mb_convert_kana('KVas')` で英数字・記号・空白・半角カナを揃え、`＂` `＇` `＼` も揃える。値の区切りになる全角の `，` `；` `＆` `｝` は揃える前に逃がし、値の中として扱う（`password=hun，ter2` の `ter2` を残さない）
 - **規則 7b の境界**: 前後が英数字・`_`・`-` の所は外す。電話番号とマイナンバーの区切りは `-‐−ー－–—/`・空白・`.`・括弧。`+81` の後ろの `(0)` も許す。12 桁の内部 ID など、伏せなくてよい数字も伏せることがある
-- **規則 8 のキー**: `password|passwd|pwd|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム`（大文字小文字を区別しない）
+- **規則 8 のキー**: `password|passwd|pwd|pw(?![a-z])|passphrase|passcode|php[_-]auth[_-]pw|pass(?![a-z])|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|cookie|session|otp|one[_-]?time|verification[_-]?code|パスワード|暗証番号|トークン|確認番号|確認コード|認証コード|ワンタイム`（大文字小文字を区別しない）
   - 語の前に境界は求めない（`remember_token`・`XSRF-TOKEN` にも当たる）。語の後ろに `[A-Za-z0-9_-]*` が続いてよい（`password_confirmation`）
-  - `pass` は後ろに英小文字が続かないときだけ（`db_pass`・`smtp_pass` に当て、`passed`・`passenger` に当てない）
-  - キーの後ろは `(?:\]|%5D)?\\*['"]?\s*(=>|=|:|：)\s*`（print_r と http_build_query の `]`・`%5D`、何重にもエスケープした JSON の `\` を許す）。これが無ければ当てない
+  - `pass`・`pw` は後ろに英小文字が続かないときだけ（`db_pass`・`smtp_pass`・`pw=` に当て、`passed`・`passenger`・`pwned` に当てない）
+  - キーの後ろは `(?:(?:\]|%5D)|(?:\[|%5B)[^\]=&%]*(?:\]|%5D))*\\*['"]?\s*(=>|=|:|：)\s*`（print_r と http_build_query の `]`・`%5D`、リストの添字 `password[0]=`・`token[]=`・`tokens%5B0%5D=` の繰り返し、何重にもエスケープした JSON の `\` を許す）。これが無ければ当てない
   - 値が配列（print_r の `Array (`・var_export の `array (`・JSON の `[`・`{`）なら、対応する閉じ括弧まで伏せる（JSON は `"`、var_export は `'` の中の括弧を数えない）
   - serialize の形（`s:8:"password";s:7:"…";`）は、書いてある長さだけ伏せる
   - 日本語のキーに限り、区切りに `は`・`「` も許す。値の終わりは空白か `」`・`。`

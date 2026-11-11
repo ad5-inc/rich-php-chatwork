@@ -6,7 +6,7 @@
 
 ```text
 [info][title]{件名}[/title]
-[code]{メッセージ}[/code]                    ← 形の分かる例外は必ず。ほかは send_message のときだけ（値の書き出しを含めば省く）
+[code]{メッセージ}[/code]                    ← 形の分かる例外は必ず。ほかは send_message のときだけ（値の書き出しを含めば省く。目印が改行だけなら 1 行目と「（2 行目から先は省いた）」）
 種類: {件名に入らなかった項目}                ← 無ければ出さない
 包んだもの: …                                 ← あるときだけ
 原因: …                                       ← あるときだけ（3 行まで）
@@ -52,7 +52,7 @@ Request ID: {値}（中身はログをこの番号で引く）
 | `TypeError` | `SyncService::run() 引数 #1 int←null` |
 | `FatalError`（メモリ切れ） | `メモリ切れ（上限 512 MB）` |
 | スケジュールのコマンドの失敗（素の `Exception`） | `スケジュール report:daily・終了コード 1`。名前が取れなければ `スケジュールのコマンドの失敗・終了コード 1` |
-| `RequestException` | `HTTP 503` |
+| `RequestException`・素の Guzzle の `BadResponseException`（`ClientException` など） | `HTTP 503` |
 | `ConnectionException` | `接続できない` |
 | Google の API | `HTTP 403・reason rateLimitExceeded` |
 
