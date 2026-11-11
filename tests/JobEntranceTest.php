@@ -174,6 +174,80 @@ final class JobEntranceTest extends TestCase
     }
 
     #[Test]
+    public function 残したsyncの失敗を受け止めた後の別の例外は_コマンドの入口で出す(): void
+    {
+        Context::add('command', 'report:daily');
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException) {
+            // 受け止めて続ける
+        }
+
+        report(new \LogicException('probe'));
+
+        $body = $this->onlyBody();
+        $this->assertStringContainsString("コマンド: report:daily\n", $body);
+        $this->assertStringNotContainsString('ジョブ: ', $body);
+    }
+
+    #[Test]
+    public function 残したsyncの失敗を受け止めた後の別の例外は_HTTPの入口で出す(): void
+    {
+        $this->runningOverHttp();
+        Route::get('/probe/after-sync', static function (): string {
+            try {
+                Queue::connection('sync')->push(new FailingJob());
+            } catch (RuntimeException) {
+                // 受け止めて続ける
+            }
+
+            throw new \LogicException('probe');
+        });
+
+        $this->get('/probe/after-sync')->assertStatus(500);
+
+        $body = $this->onlyBody();
+        $this->assertStringContainsString('リクエスト: GET /probe/after-sync', $body);
+        $this->assertStringNotContainsString('ジョブ: ', $body);
+    }
+
+    #[Test]
+    public function syncの失敗を包み直した例外でも_ジョブの入口で出す(): void
+    {
+        Context::add('request_id', 'req-caller');
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException $e) {
+            report(new \LogicException('wrapped', 0, $e));
+        }
+
+        $body = $this->onlyBody();
+        $this->assertStringContainsString("ジョブ: FailingJob（試行 1 回目）\n", $body);
+        $this->assertStringContainsString('Request ID: ' . FailingJob::$seenRequestId . "（ジョブの中のログ）\n", $body);
+        $this->assertStringContainsString("発端の Request ID: req-caller（例外の記録はこの番号）\n", $body);
+    }
+
+    #[Test]
+    public function 入れ子のコマンドでは_一番外のコマンドの終わりで戻す(): void
+    {
+        $input = new \Symfony\Component\Console\Input\ArrayInput([]);
+        $output = new \Symfony\Component\Console\Output\NullOutput();
+        Event::dispatch(new \Illuminate\Console\Events\CommandStarting('outer', $input, $output));
+        try {
+            Queue::connection('sync')->push(new FailingJob());
+        } catch (RuntimeException) {
+            // 受け止めて続ける
+        }
+        Event::dispatch(new \Illuminate\Console\Events\CommandStarting('inner', $input, $output));
+        Event::dispatch(new \Illuminate\Console\Events\CommandFinished('inner', $input, $output, 0));
+
+        $this->assertSame(FailingJob::$seenRequestId, Context::get('request_id'), '中の Artisan::call の終わりでは戻さない');
+
+        Event::dispatch(new \Illuminate\Console\Events\CommandFinished('outer', $input, $output, 0));
+        $this->assertFalse(Context::has('request_id'));
+    }
+
+    #[Test]
     public function 最小の知らせも_普通の知らせと同じRequestIDを出す(): void
     {
         Context::add('request_id', 'req-caller');

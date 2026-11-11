@@ -75,6 +75,8 @@ final class RedactorTest extends PlainTestCase
         yield '+81 の後ろの (0)' => ['tel +81 (0)90-1234-5678 end', 'tel （伏せた） end'];
         yield '– と / で区切った電話番号' => ['tel 03–1234/5678 end', 'tel （伏せた） end'];
         yield '. で区切ったマイナンバー' => ['番号 1234.5678.9012 を', '番号 （伏せた） を'];
+        yield 'passphrase と passcode' => ['passphrase=probe-1, passcode: 1234', 'passphrase=（伏せた）, passcode: （伏せた）'];
+        yield 'リストの添字' => ['password[0]=probe-2&token[]=probe-3&tokens%5B0%5D=probe-4&name=a', 'password[0]=（伏せた）&token[]=（伏せた）&tokens%5B0%5D=（伏せた）&name=a'];
         yield '文言の中の鍵の形' => ['key AK' . 'IA' . str_repeat('PROBE', 3) . '1 rejected', 'key （伏せた） rejected'];
     }
 

@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Log;
 use Illuminate\View\ViewException;
 use LogicException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 
@@ -106,10 +107,80 @@ final class ReporterTest extends TestCase
     {
         config(['rich-chatwork.send_message' => true]);
 
-        $body = $this->reporter()->body($this->failWithMessage("壊れた\xC3\x28文字\x07と\ttab\nと改行"));
+        $body = $this->reporter()->body($this->failWithMessage("壊れた\xC3\x28文字\x07と\ttab"));
 
-        $this->assertStringContainsString("[code]壊れた?(文字と    tab\nと改行[/code]", $body);
+        $this->assertStringContainsString('[code]壊れた?(文字と    tab[/code]', $body);
         $this->assertTrue(mb_check_encoding($body, 'UTF-8'));
+    }
+
+    /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function dumps(): iterable
+    {
+        $object = new Fixtures\ProbeSecrets();
+
+        yield 'print_r のオブジェクト' => ['probe ' . print_r($object, true), ['probe-pw-6', 'probe-tk-6']];
+        yield 'serialize のオブジェクト（protected・private）' => ['probe ' . serialize($object), ['probe-pw-6', 'probe-tk-6']];
+        yield 'var_export のオブジェクト' => ['probe ' . var_export($object, true), ['probe-pw-6', 'probe-tk-6']];
+        yield 'serialize の長さのずれ' => ['probe s:8:"password";s:1:"probe-pw-7";', ['probe-pw-7']];
+        yield '閉じ括弧の数え方' => ['probe {"token":"]}probe-pw-8"}', ['probe-pw-8']];
+        yield '入れ子の JSON' => ['payload {"data":{"secret_value":"probe-pw-9"}}', ['probe-pw-9']];
+        yield 'JSON の配列' => ['payload ["probe-pw-10"]', ['probe-pw-10']];
+        yield 'エスケープした JSON' => ['payload "{\"pin\":\"probe-pw-11\"}"', ['probe-pw-11']];
+        yield '=> の書き出し' => ["values 'pin' => 'probe-pw-12'", ['probe-pw-12']];
+        yield 'URL の角括弧' => ['query a%5Bpin%5D=probe-pw-13', ['probe-pw-13']];
+        yield '複数行' => ["first line\npin probe-pw-14", ['probe-pw-14']];
+        yield 'serialize の配列' => ['probe a:1:{i:0;s:11:"probe-pw-15";}', ['probe-pw-15']];
+        yield '全角で書いた JSON' => ['payload ｛＂pin＂:＂probe-pw-16＂｝', ['probe-pw-16']];
+    }
+
+    /**
+     * @param list<string> $secrets
+     */
+    #[Test]
+    #[DataProvider('dumps')]
+    public function 値の書き出しの形を含む文言は_伏せずに文言ごと省く(string $message, array $secrets): void
+    {
+        config(['rich-chatwork.send_message' => true]);
+
+        $body = $this->reporter()->body($this->failWithMessage($message));
+
+        $this->assertStringContainsString('[/title][code]（値の書き出しを含むので省いた。ログを見る）[/code]アプリの行: ', $body);
+        foreach ($secrets as $secret) {
+            $this->assertStringNotContainsString($secret, $body);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function sentences(): iterable
+    {
+        yield 'CSRF' => ['CSRF token mismatch.'];
+        yield '配列のキー' => ['Undefined array key "name"'];
+        yield '未定義のメソッド' => ['Call to undefined method App\X::y()'];
+        yield '短い文' => ['鍵のファイルが無い'];
+        yield '関数の名前' => ['in_array(): Argument #2 ($haystack) must be of type array, null given'];
+    }
+
+    #[Test]
+    #[DataProvider('sentences')]
+    public function 普通の1行の文は省かない(string $message): void
+    {
+        config(['rich-chatwork.send_message' => true]);
+
+        $body = $this->reporter()->body($this->failWithMessage($message));
+
+        $this->assertStringContainsString('[/title][code]' . $message . '[/code]', $body);
+    }
+
+    #[Test]
+    public function noticeの地の文は行ごとに省き_枠は省かない(): void
+    {
+        $this->reporter()->notice('取り込み', ['3 件が失敗', 'payload {"pin":"probe-pw-17"}'], 'dump', "{\"rows\": 3}");
+
+        $this->assertSame("[info][title]Probe（production）知らせ: 取り込み[/title]3 件が失敗\n（値の書き出しを含むので省いた。ログを見る）\n[code]{\"rows\": 3}[/code][/info]", $this->transport->sent[0]['body']);
     }
 
     #[Test]
