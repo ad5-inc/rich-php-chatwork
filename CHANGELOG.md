@@ -21,7 +21,8 @@
 - sync のジョブで失敗して呼び出し側で記録されたときは、ジョブの ID と例外の記録の ID を分けて書く。出した側に ID が無ければジョブの ID を入口の終わりまで残し、後のジョブの発端には使わない
 - 例外のハンドラーは継承ではなく `reportable()` の有無で登録する（コンソールの Collision の下でも届く）。持たなければ警告を 1 度だけ書く
 - 送れなかった後の知らせは「14:30 から、送らずに 3 回（送れなかった分を含む）」と、送れなかった 1 回も含めて書く
-- 伏せる規則: 配列の値（print_r・var_export・JSON）、serialize の値、`\uXXXX` で書いたキー、`php_auth_pw`・`db_pass`・http_build_query の `%5D`
+- 形の分からない例外の文言と notice の地の文の行は、値の書き出しの形（複数行・`=>`・serialize・print_r・var_export・JSON・`%5B`）を含むなら、伏せずに丸ごと省く
+- 伏せる規則: `passphrase`・`passcode`・リストの添字（`password[0]=`）、配列の値（print_r・var_export・JSON）、serialize の値、`\uXXXX` で書いたキー、`php_auth_pw`・`db_pass`・http_build_query の `%5D`
 - 送る直前に本文が 30,000 文字を超えていたら、件名は普通のまま本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える
 - トークンと本文を受ける引数に `#[\SensitiveParameter]`（呼び出しの並びに残さない）
 - `notice()` に枠の中身（`code`）を足した
