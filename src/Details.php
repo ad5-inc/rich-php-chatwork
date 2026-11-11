@@ -49,6 +49,15 @@ final class Details
     /** Laravel のスケジュール（schedule:run）が作るコマンドの失敗 */
     private const SCHEDULE = '/\AScheduled command \[(.{1,1000})\] failed with exit code \[(\d{1,3})\]\.\z/s';
 
+    /** 接続の失敗として、ドライバーの文言を使わず固定の言葉にする番号（HY000 のとき） */
+    public const CONNECTION_FAILURE_DRIVERS = [2002, 2006, 1045];
+
+    /**
+     * 間引きでアプリの行を外す（どこで起きても同じ障害とみなす）番号。2006（接続が切れた）は長い問い合わせなど
+     * 特定のコードが原因のことがあるので、場所ごとに分けて数える
+     */
+    public const OUTAGE_DRIVERS = [2002, 1045];
+
     /** artisan のコマンドの名前 */
     public const COMMAND = '/\A[A-Za-z0-9_:\-]{1,100}\z/';
 
@@ -118,7 +127,15 @@ final class Details
      */
     public static function isConnectionFailure(?string $state, ?int $driver): bool
     {
-        return $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, [2002, 2006, 1045], true)));
+        return $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, self::CONNECTION_FAILURE_DRIVERS, true)));
+    }
+
+    /**
+     * DB の接続断（間引きのキーからアプリの行を外す）
+     */
+    public static function isOutage(?string $state, ?int $driver): bool
+    {
+        return $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, self::OUTAGE_DRIVERS, true)));
     }
 
     public static function status(Throwable $e): Kind

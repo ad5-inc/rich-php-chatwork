@@ -59,13 +59,7 @@ final class KnownMessage
         }
 
         if (Details::isConnectionFailure($state, $driver)) {
-            $words = match (true) {
-                $driver === 1045 => '認証に失敗',
-                $driver === 2002 && preg_match(self::NAME_LOOKUP, $previous->getMessage()) === 1 => '名前が引けない',
-                default => '接続できない',
-            };
-
-            return $head . ($driver === null ? '' : " [{$driver}]") . " {$words}（詳細はログ） {$connection}";
+            return $head . ($driver === null ? '' : " [{$driver}]") . ' ' . self::connectionWords($driver, $previous->getMessage()) . "（詳細はログ） {$connection}";
         }
 
         $driverMessage = $previous->errorInfo[2] ?? null;
@@ -78,6 +72,18 @@ final class KnownMessage
         }
 
         return ltrim($head . ($driver === null ? '' : " ドライバー {$driver}") . "（文言はログ） {$connection}");
+    }
+
+    /**
+     * 接続の失敗の固定の言葉。ドライバーの文言は出さず、言葉を選ぶためだけに読む（写された文言を伏せるときも同じ言葉にする）
+     */
+    public static function connectionWords(?int $driver, string $driverMessage): string
+    {
+        return match (true) {
+            $driver === 1045 => '認証に失敗',
+            $driver === 2002 && preg_match(self::NAME_LOOKUP, $driverMessage) === 1 => '名前が引けない',
+            default => '接続できない',
+        };
     }
 
     private static function request(RequestException $e): string
