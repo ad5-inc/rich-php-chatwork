@@ -25,11 +25,12 @@
 | --- | --- | --- |
 | メッセージ（形の分からない例外） | 全角を揃えてから、写したコマンドラインと、下の規則 1〜10 の全部と鍵の形 | `RedactorTest`・`ReporterTest` |
 | メッセージ（形の分かる例外） | 組み立て直す（下の「組み立て直す例外」） | `KnownMessageTest` |
+| SQL の形 | 字句の許可リストで組み立てる（下の「SQL の形」） | `SqlShapeTest` |
 | notice の地の文の行 | メッセージと同じ | `ReporterTest` |
 | notice の枠（`code`） | メッセージと同じ | `RedactorTest`・`ReporterTest` |
 | 前後のコード | 規則 2〜5・7、鍵の形、規則 8（値が引用符で始まるときだけ） | `RedactorTest` |
 | リクエスト | 規則 6 だけ | `RedactorTest` |
-| 件名・種類・Request ID・アプリの行・呼び出しの並び | 当てない（値を含まない作りで守る） | `DetailsTest`・`NamesTest` |
+| 件名・種類・説明・Request ID・アプリの行・呼び出しの並び | 当てない（値を含まない作りで守る。説明は決まった文だけ） | `DetailsTest`・`GlossaryTest`・`NamesTest` |
 
 送らない環境（testing・local）でログに書く写しも、伏せた後の本文。サーバーの絶対パス（base path）は相対パスにする（文言・匿名クラス・クロージャの名前の中も）。
 
@@ -80,7 +81,8 @@
 | --- | --- |
 | ドライバーの文言が許可リストに当たる | `SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)` |
 | 許可リストに当たらない（権限の不足 1142 など） | `SQLSTATE[42000] ドライバー 1142（文言はログ） (Connection: mysql)` |
-| 接続の失敗（SQLSTATE `08xxx`、または `HY000` でドライバー 2002・2006・1045。`Details::CONNECTION_FAILURE_DRIVERS`） | `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql)`。2002 で名前が引けないときは `名前が引けない`、ほかは `接続できない` |
+| 接続の失敗（SQLSTATE `08xxx`、または `HY000` でドライバー 2002・2006・1045。`Details::CONNECTION_FAILURE_DRIVERS`） | `SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql)`。2002 で名前が引けないときは `名前が引けない`、2006 は `接続が切れた`、ほかは `接続できない` |
+| SQL の形を別の枠に出すとき（上のどの場合も） | 末尾を `(Connection: mysql, SQL: 下の枠)` にする |
 | previous が PDOException でない | `SQLSTATE[HY000] （文言はログ） (Connection: mysql)` |
 
 - SQLSTATE とドライバーの番号は、previous の PDOException の `errorInfo` から取る。無ければ文言の頭の `SQLSTATE[…]`・`[番号]` から取る（接続の失敗では `getCode()` が番号になるので使わない）
@@ -101,8 +103,60 @@
 | `… near '…' at line N`（前に `'` を含まない） | near の後ろ |
 | `Cannot add or update a child row: a foreign key constraint fails (…)` | 括弧の中 |
 | `Column '…' cannot be null` | なし |
+| `Out of range value for column '…' at row N` | なし |
+| `Field '…' doesn't have a default value` | なし |
+| `Lock wait timeout exceeded; try restarting transaction` | なし（固定の文） |
+| `Deadlock found when trying to get lock; try restarting transaction` | なし（固定の文） |
 
-「なし」の形は、引用符の中に `'` があれば許可リストの外として扱う。
+「なし」の形は、引用符の中に `'` があれば許可リストの外として扱う。`Table '…' doesn't exist`（1146）はデータベース名を含むので足さない。
+
+### SQL の形
+
+DB の例外では、値をすべて `?` にした SQL の形を別の `[code]` の枠に出す（[0013](decisions/0013-glossary-and-sql-shape.md)）。
+
+- 元にするのは `QueryException::getSql()`（値を埋める前の SQL）。`getRawSql()`（値を埋めた SQL）と文言は使わない
+- 出すのは MySQL・MariaDB の接続だけ。ドライバーは Laravel が例外に添えた接続の詳細（`getConnectionDetails()`）から、無ければ設定 `database.connections.{接続名}.driver` から取る。DB へは問い合わせない。ほかのドライバーは今までどおり `SQL: （ログ）`（PostgreSQL の `$$…$$` のような引用の形を読まないため）
+
+値を埋める前の SQL にも、値が直接入る道がある（Laravel 13 で確かめた物）。
+
+| 道 | 入る物 | 形での扱い |
+| --- | --- | --- |
+| `whereIntegerInRaw`・Eloquent の `whereKey`（int の主キー）・int のキーの eager load | 整数の並び | 数は `?`。並びは縮める |
+| `limit`・`offset`・`groupLimit`・`RAND(seed)` | 整数 | `?` |
+| JSON の列（`col->key`） | `'$."key"'` の文字列 | `?` |
+| `whereRaw`・`selectRaw`・`orderByRaw`・`havingRaw`・`DB::raw`・`DB::statement`・`DB::unprepared` などに直接書いた SQL | 文字列・数・コメント、引用符なしで埋めた値 | 文字列・数・コメントは `?`。引用符の無い語は許可リストの語だけ残す |
+| スキーマの操作（マイグレーション） | 既定値・コメントの文字列 | `?` |
+| 識別子に利用者の入力を入れた書き方（`orderBy($request->sort)` など） | バッククォートの中の名前 | 名前の文字だけなら残る（下の「伏せきれない物」） |
+| データベース名を付けた表（`other_db.users`） | データベースの名前 | 接続の設定と同じ名前は `{db}` にする |
+
+左から 1 文字ずつ読み（正規表現の後戻りを使わない）、次の字句だけを残す。
+
+| 字句 | 出す物 |
+| --- | --- |
+| バッククォートの識別子で、中身が `[A-Za-z0-9_$]{1,64}` | そのまま。接続の設定のデータベース名と同じなら `{db}`。中身が違えば `?` |
+| 引用符の無い語のうち、許可リストの語（SQL のキーワードとよく使う関数・型。大文字小文字を区別しない） | 小文字にして出す |
+| `?` | そのまま |
+| 記号 `( ) , . = < > ! * + - / % \|` と空白 | そのまま（空白は 1 つにまとめる） |
+| `'…'`・`"…"`（`\` の後ろの 1 文字と、重ねた引用符は中身として読む） | `?`。閉じが無ければ末尾まで `?` |
+| 数（数字で始まる語。`0x1f`・`1e-5`・`1.5` を含む） | `?` |
+| コメント（`--`・`#` から行末、`/* … */`。閉じが無ければ末尾まで） | `?` |
+| 許可リストに無い語・そのほかの文字（`@`・`:`・`;`・`[`・`{`・全角など） | `?`（`?` にした物が空白を挟んで続けば 1 つ） |
+
+- 文字列の中の `\` を常に逃がしとして読む。`NO_BACKSLASH_ESCAPES` の DB では文字列を長く読みすぎるが、`?` に飲む側（伏せすぎる側）なので受け入れる
+- 引用符の無い語を許可リストにするのは、`whereRaw("token = {$token}")` のように埋めた値を残さないため。Laravel は MySQL では識別子をいつもバッククォートで包むので、ふつうの問い合わせでは表名・列名を失わない。raw で引用符なしに書いた列名は `?` になる（`deleted_at is null` は `? is null`）
+- 出す文字に `[` `]`・引用符・改行が入らず、`{` `}` は `{db}` だけ。`[/code]`・`[To:…]`・`[info]` は字句の段階で作れない。そのうえで `Text::field()`（[code] の中の逃がし）にも通す
+
+並びを縮める（字句の並びに対して行う）。
+
+| 形 | 縮めた形 |
+| --- | --- |
+| 括弧の中が `?` と `,` だけで、`?` が 4 個以上 | `(? ×120)` |
+| `values` の後ろで、同じ形の括弧が `,` で 2 つ以上続く | `values (?, ?, ?) ×500` |
+| 3 個以下、または `values` の後ろの 1 行（列と対になる） | 縮めない |
+
+- 読む SQL は先頭の 20,000 バイトまで。後ろは読まず、形の末尾に `…` を付ける（途中の文字列が閉じていなくても末尾まで `?`）
+- 出す形は表示幅 600 まで。超えたら末尾を `…（長いので省いた。全文はログ）` にする
+- 組み立てに失敗したら（読み取りの例外など）、形の行と枠を出さず、メッセージは今までどおり `SQL: （ログ）` にする
 
 ### RequestException
 
@@ -142,6 +196,7 @@ Laravel の `Process`（`ProcessFailedException`・`ProcessTimedOutException`）
 ## 伏せきれない物
 
 - 氏名・住所のような形の無い個人情報と、普通の語のキーの値。送り先の部屋には、文言を見てよい人だけを入れる
+- SQL の形の中の名前。識別子に利用者の入力を入れた書き方（`orderBy($request->sort)` で名前の文字だけの値）、接続の設定と違うデータベースの名前、テナントごとの表名（`tenant_123_x`）。値ではなく名前として出る。同じ値は 1054 の許可リスト（`Unknown column '…'`）でも今までどおり出る
 - 形の決まっていない秘密（短いパスワードをキーの無い文に入れたなど）
 - 規則 9 に当たらない短いトークン（32 文字未満）
 

@@ -26,3 +26,4 @@
 | [0010](decisions/0010-job-request-id.md) | ジョブの Request ID は例外の記録の後に戻す |
 | [0011](decisions/0011-omit-dumps.md) | 値の書き出しの形を含む文言は省く（0012 で置き換え） |
 | [0012](decisions/0012-always-send-message.md) | 例外の文言は必ず出し、設定は送り先だけにする |
+| [0013](decisions/0013-glossary-and-sql-shape.md) | 番号に決まった日本語を添え、DB の例外は値を ? にした SQL の形を出す |

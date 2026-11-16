@@ -19,6 +19,7 @@ final readonly class ProcessFailure
         public string $summary,
         /** @var list<array{label: string, value: string, inSummary: bool}> */
         public array $items,
+        public ?string $explanation = null,
     ) {
     }
 
@@ -42,9 +43,11 @@ final readonly class ProcessFailure
             return new self('外のコマンドの失敗（コマンドラインはログ）', '外のコマンドの失敗', []);
         }
 
-        return new self("外のコマンドの失敗（終了コード {$exit}、コマンドラインはログ）", "外のコマンドの失敗・終了コード {$exit}", [
+        $term = Glossary::exitCode($exit);
+
+        return new self("外のコマンドの失敗（終了コード {$exit}、コマンドラインはログ）", Details::join('外のコマンドの失敗', $term['short'] ?? null, "終了コード {$exit}"), [
             ['label' => '終了コード', 'value' => (string) $exit, 'inSummary' => true],
-        ]);
+        ], $term['explanation'] ?? null);
     }
 
     private static function timeout(?float $seconds): self

@@ -27,6 +27,10 @@ final class DriverMessage
         "/\\A([^']*? near ')(.*)(' at line \\d+)\\z/isu" => true,
         '/\A(Cannot add or update a child row: a foreign key constraint fails \()(.*)(\))\z/isu' => true,
         "/\\AColumn '[^']*' cannot be null\\z/iu" => false,
+        "/\\AOut of range value for column '[^']*' at row \\d+\\z/iu" => false,
+        "/\\AField '[^']*' doesn't have a default value\\z/iu" => false,
+        '/\ALock wait timeout exceeded; try restarting transaction\z/iu' => false,
+        '/\ADeadlock found when trying to get lock; try restarting transaction\z/iu' => false,
     ];
 
     /** 写された文言の中で、その場で伏せる版（$1・$3 を残し $2 を伏せる） */

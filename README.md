@@ -36,7 +36,7 @@ Packagist には登録していない。composer.json に GitHub のリポジト
         { "type": "vcs", "url": "https://github.com/ad5-inc/rich-php-chatwork" }
     ],
     "require": {
-        "ad5-inc/rich-php-chatwork": "^0.5"
+        "ad5-inc/rich-php-chatwork": "^0.6"
     }
 }
 ```
@@ -108,7 +108,9 @@ app(\Ad5\RichPhpChatwork\Reporter::class)->notice('取り込みの失敗', ['3 �
 ## 本文の形
 
 ```text
-[info][title]example-app（production）QueryException: SQLSTATE 22001・列 name[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
+[info][title]example-app（production）QueryException: 文字が長すぎる・列 name・SQLSTATE 22001[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: 下の枠)[/code]説明: 列の長さを超える文字列を入れようとした
+SQL の形（値は ?）:
+[code]update `employees` set `name` = ?, `updated_at` = ? where `id` = ?[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
 [code]  40 | $param = EmployeeParam::from($request);
   41 |
 > 42 | $employee->update($param->toArray());
@@ -122,7 +124,9 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 （vendor の 38 段）[/code][/info]
 ```
 
-- 件名は「アプリ（環境）短いクラス名: 要約」。要約は値を含まず、文言は入れない（スマホのロック画面に出るため）
+- 件名は「アプリ（環境）短いクラス名: 要約」。要約は「短い言葉・決まった項目・番号」の順で、値を含まず、文言は入れない（スマホのロック画面に出るため）
+- 番号（SQLSTATE・MySQL の番号・HTTP の状態・Google の reason・終了コード）とよくある例外には、決まった日本語を表から引いて足す。件名には短い言葉、本文には「説明: 」の行。表に無い値には何も足さない
+- DB の例外（MySQL・MariaDB の接続）は、値をすべて `?` にした SQL の形を枠で出す
 - 入口はジョブ → コマンド → HTTP の順に見て、最初に当たった 1 つを出す
 
 並び・件名の要約・アプリの行・入口・間引きの言い方・ほかの例は [docs/message-format.md](docs/message-format.md)。
@@ -136,6 +140,8 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 - 件名（アプリ・環境・短いクラス名・種類ごとの要約）
 - **例外の文言（例外に入れた文字列）。どんな文言でも省かずに出す。** 秘密と形の分かる個人情報は、その値だけを「（伏せた）」にする。値の書き出し（print_r・JSON など）や複数行の文言も、伏せる規則を当てて全部出す。写したプロセスの文言（`The command "…" failed.` など）は、引用符の中のコマンドラインだけを伏せる。長さは表示幅 500 まで
 - DB・HTTP クライアント・外のコマンドの例外は、元の文言の代わりに部品が組み立て直した文言（SQL の値・応答の本文・コマンドラインを含まない。[組み立て直す例外](docs/redaction.md#組み立て直す例外)）
+- DB の例外（MySQL・MariaDB の接続）の SQL の形。値を埋める前の SQL を字句で読み、文字列・数・コメントと、許可リストに無い語をすべて `?` にした物（[SQL の形](docs/redaction.md#sql-の形)）。表名・列名は残る
+- 番号に添える決まった日本語（件名の短い言葉と「説明: 」の行）
 - 種類ごとの決まった部分のうち、件名に入らなかった物
 - アプリの行と前後 2 行（`app/`・`routes/` の中のファイルだけ。形のはっきりした秘密と、文字列の値のパスワードなどは伏せる）
 - 入口（ジョブの短いクラス名と試行回数／コマンドの名前／HTTP のメソッドとルートのテンプレートと利用者の内部 ID）、Request ID
@@ -143,13 +149,21 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 
 送らないもの:
 
-- DB の例外の SQL・値・接続先（Host・Port・Database）、HTTP クライアントの例外の応答の本文・URL の問い合わせ・利用者情報、プロセスの例外のコマンドライン
+- DB の例外の SQL の値（SQL は値を ? にした形だけ送る）・接続先（Host・Port・Database。SQL の形の中の接続のデータベース名は `{db}` にする）、HTTP クライアントの例外の応答の本文・URL の問い合わせ・利用者情報、プロセスの例外のコマンドライン
 - 呼び出しの並びの引数の値（`getTraceAsString()` は php.ini しだいで引数の値を含むので使わない）
 - サーバーの絶対パス（相対パスにする。匿名クラス・クロージャの名前の中も）
 
 DB・HTTP クライアント・プロセスの例外の文言の組み立て方と、伏せる規則の全部は [docs/redaction.md](docs/redaction.md)。
 
+### 伏せきれない物
+
 **伏せる規則は「形のある秘密と個人情報」にしか当たらない。** 氏名・住所のような形の無い個人情報や、普通の語のキー（`name` など）の値は伏せられない。送り先の部屋には、文言を見てよい人（社内の開発の担当）だけを入れる。
+
+SQL の形には、表名・列名などの名前が残る。次の物は値ではなく名前として出る。
+
+- 識別子に利用者の入力を入れた書き方（`orderBy($request->sort)` など）で、名前の文字だけでできた値
+- 接続の設定と違うデータベースの名前（別のデータベースを表名に付けた物）
+- テナントごとの表名（`tenant_123_x` など）
 
 アプリの例外を tinker の `--execute` で投げて試すと、アプリのファイルの行が無いので「アプリの行」と前後のコードは出ない（tinker がその場で作ったコードの中で投げるため）。形を確かめるときは、アプリのコードの中で投げる（開発用のルートやコマンドを使う）。
 
@@ -181,7 +195,7 @@ DB・HTTP クライアント・プロセスの例外の文言の組み立て方�
 
 ## 上げるとき
 
-版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.4 から 0.5 へは、アプリの `config/rich-chatwork.php` を消す（送り先の `.env` はそのまま）。
+版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.4 から 0.5 へは、アプリの `config/rich-chatwork.php` を消す（送り先の `.env` はそのまま）。0.5 から 0.6 へは、件名の要約の並びが変わり、送り先の部屋に SQL の形（表名・列名）が出る。
 
 ## 気をつけること
 

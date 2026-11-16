@@ -24,17 +24,22 @@ final class KnownMessage
 {
     public const FAILED = '（組み立てられなかったので省いた。ログを見る）';
 
+    /** 接続の失敗のうち、名前が引けないときの言葉（件名の要約は、表の言葉よりこちらを取る） */
+    public const NAME_LOOKUP_WORDS = '名前が引けない';
+
     /** ドライバー 2002 のうち、名前が引けないときの文言の手がかり（文言は出さず、言葉を選ぶためだけに読む） */
     private const NAME_LOOKUP = '/getaddrinfo|php_network_getaddresses|Name or service not known|nodename nor servname|Temporary failure in name resolution/i';
 
     /**
      * 形の分かる例外なら組み立てた文言、それ以外は null
+     *
+     * @param bool $sqlBelow DB の例外で、SQL の形を本文の別の枠に出すか（出すなら「SQL: 下の枠」、出さないなら今までどおり）
      */
-    public static function of(Throwable $e): ?string
+    public static function of(Throwable $e, bool $sqlBelow = false): ?string
     {
         try {
             return match (true) {
-                $e instanceof QueryException => self::query($e),
+                $e instanceof QueryException => self::query($e, $sqlBelow),
                 $e instanceof RequestException => self::request($e),
                 $e instanceof ConnectionException => self::connection($e),
                 default => ProcessFailure::of($e)?->message,
@@ -44,11 +49,11 @@ final class KnownMessage
         }
     }
 
-    private static function query(QueryException $e): string
+    private static function query(QueryException $e, bool $sqlBelow): string
     {
         [$state, $driver] = Details::sqlState($e);
         $name = preg_match(Details::CONNECTION, $e->getConnectionName()) === 1 ? $e->getConnectionName() : Redactor::MARK;
-        $connection = "(Connection: {$name})";
+        $connection = $sqlBelow ? "(Connection: {$name}, SQL: 下の枠)" : "(Connection: {$name})";
         $head = $state === null ? '' : "SQLSTATE[{$state}]";
         $previous = $e->getPrevious();
 
@@ -66,7 +71,7 @@ final class KnownMessage
             // PDO が付ける SQLSTATE の説明（String data, right truncated など）は決まった英語
             $stateText = preg_match('/\ASQLSTATE\[[0-9A-Z]{5}\]: ([A-Za-z ,\/\-]{1,80}): /', $previous->getMessage(), $match) === 1 ? "{$match[1]}: " : '';
 
-            return "{$head}: {$stateText}" . ($driver === null ? '' : "{$driver} ") . "{$allowed} (Connection: {$name}, SQL: （ログ）)";
+            return "{$head}: {$stateText}" . ($driver === null ? '' : "{$driver} ") . "{$allowed} (Connection: {$name}, SQL: " . ($sqlBelow ? '下の枠' : '（ログ）') . ')';
         }
 
         return ltrim($head . ($driver === null ? '' : " ドライバー {$driver}") . "（文言はログ） {$connection}");
@@ -79,7 +84,9 @@ final class KnownMessage
     {
         return match (true) {
             $driver === 1045 => '認証に失敗',
-            $driver === 2002 && preg_match(self::NAME_LOOKUP, $driverMessage) === 1 => '名前が引けない',
+            $driver === 2002 && preg_match(self::NAME_LOOKUP, $driverMessage) === 1 => self::NAME_LOOKUP_WORDS,
+            // 2006（MySQL server has gone away）はつながった後に切れた物
+            $driver === 2006 => '接続が切れた',
             default => '接続できない',
         };
     }
@@ -105,7 +112,9 @@ final class KnownMessage
             ? self::origin($previous->getRequest()->getUri())
             : null;
 
-        return $origin === null ? '接続できない' : "接続できない: {$origin}";
+        $words = Glossary::connection($previous);
+
+        return $origin === null ? $words : "{$words}: {$origin}";
     }
 
     /**

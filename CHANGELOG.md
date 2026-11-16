@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## 0.6.0（2026-11-16）
+
+番号に決まった日本語を添え、DB の例外は値を ? にした SQL の形を出す（[0013](docs/decisions/0013-glossary-and-sql-shape.md)）。
+
+### 足した物
+
+- SQLSTATE・MySQL の番号・HTTP の状態・Google の reason・終了コード・よくある例外のクラスに、決まった日本語を表から引いて足す。件名には短い言葉、本文にはメッセージの枠の後ろに「説明: 」の行。表に無い値には何も足さない
+- DB の例外（MySQL・MariaDB の接続）で、値をすべて `?` にした SQL の形を `[code]` の枠で出す。メッセージの末尾は `SQL: 下の枠` になる。ほかのドライバーと、形を組み立てられなかったときは今までどおり `SQL: （ログ）`
+- 件名の要約: 実行時間の上限（`実行時間の上限（30 秒）`）、null のメソッド呼び出し（`null の save() を呼んだ`）、ジョブの試行回数の上限・時間切れ、`DivisionByZeroError`・`ArgumentCountError`・`UnhandledMatchError`・`ValueError`・`JsonException`
+- HTTP クライアントの接続の失敗を、Guzzle の例外のクラスで「接続の時間切れ」「応答の時間切れ」に言い分ける
+- ドライバーの文言の許可リスト: 1264（`Out of range value for column '…' at row N`）・1364（`Field '…' doesn't have a default value`）・1205・1213
+
+### 変えた物
+
+- 件名の要約を「短い言葉・決まった項目・番号」の順にした（`SQLSTATE 22001・列 name` → `文字が長すぎる・列 name・SQLSTATE 22001`、`HTTP 503` → `相手が一時停止・HTTP 503`、`SQLSTATE HY000・接続できない` → `接続できない・SQLSTATE HY000`）。`Details::of()` の要約も同じ
+- DB の接続の失敗の 2006（MySQL server has gone away）を「接続できない」から「接続が切れた」にした
+- 本文が 30,000 文字を超えたときに落とす順を、呼び出しの並び → 前後のコード → SQL の形 → メッセージを詰める、にした
+
+### 上げるときの注意
+
+- 件名で知らせを見分けている仕組み（Chatwork の検索・転送の規則など）があれば直す。要約の並びが変わり、頭に日本語の言葉が付く
+- 送り先の部屋に SQL の形が出る。値は出ないが、表名・列名は出る。識別子に利用者の入力を入れた書き方（`orderBy($request->sort)` など）では、名前の文字だけの値が残る（README の「伏せきれない物」）
+- composer.json の制約を `^0.6` にする
+
 ## 0.5.1（2026-11-11）
 
 ### 足した物

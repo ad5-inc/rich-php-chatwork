@@ -267,8 +267,8 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($e);
 
-        $this->assertStringStartsWith('[info][title]Probe（production）ClientException: HTTP 429[/title]', $body);
-        $this->assertSame('HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+        $this->assertStringStartsWith('[info][title]Probe（production）ClientException: 回数の上限・HTTP 429[/title]', $body);
+        $this->assertSame('回数の上限・HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
     }
 
     #[Test]
@@ -897,7 +897,7 @@ final class ReporterTest extends TestCase
         $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
         $pdo->errorInfo = ['23000', 1062, 'x'];
 
-        $this->assertSame("[info][title]Probe（production）QueryException: SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
+        $this->assertSame("[info][title]Probe（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
         $this->assertSame("[info][title]Probe（production）知らせ: 多い[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), null, [], '多い'));
 
         // 要約が長くても、種類（短いクラス名）は件名に残り、要約の後ろから切る
@@ -1045,6 +1045,106 @@ final class ReporterTest extends TestCase
         $this->assertLessThanOrEqual(30000, mb_strlen($body));
         $this->assertMatchesRegularExpression('/\[code\]x+…\[\/code\]/', $body);
         $this->assertStringContainsString('前後のコード: 長いので省いた（ログを見る）', $body);
+    }
+
+    #[Test]
+    public function 説明の行はメッセージの枠のすぐ後ろに置く(): void
+    {
+        $body = $this->reporter()->body(new \Illuminate\Http\Client\RequestException(new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response(503))));
+
+        $this->assertStringContainsString("[code]HTTP 503[/code]説明: 相手が一時的に使えない（混雑か保守）\nアプリの行: ", $body);
+    }
+
+    #[Test]
+    public function 表に無い値では説明の行を出さない(): void
+    {
+        $body = $this->reporter()->body(new \Illuminate\Http\Client\RequestException(new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response(418))));
+
+        $this->assertStringContainsString('[code]HTTP 418[/code]アプリの行: ', $body);
+    }
+
+    #[Test]
+    public function DBの例外は_値をにしたSQLの形を説明の後ろの枠に出し_値は出さない(): void
+    {
+        $e = $this->queryFailure('mysql', "select * from `users` where `email` = '" . self::SECRET . "' and `id` in (90210, 90211, 90212, 90213)");
+
+        $body = $this->reporter()->body($e);
+
+        $this->assertStringContainsString("(Connection: mysql, SQL: 下の枠)[/code]説明: 一意のキー（主キー・unique）に、すでにある値を入れようとした\nSQL の形（値は ?）:\n[code]select * from `users` where `email` = ? and `id` in (? ×4)[/code]アプリの行: ", $body);
+        $this->assertStringNotContainsString(self::SECRET, $body);
+        $this->assertStringNotContainsString('90210', $body);
+    }
+
+    #[Test]
+    public function SQLの形の中の記法は本文を壊さない(): void
+    {
+        $e = $this->queryFailure('mysql', "select * from `t` where `a` = '[/code][toall]' and b = [/code][To:1]");
+
+        $body = $this->reporter()->body($e);
+
+        $this->assertSame(substr_count($body, '[code]'), substr_count($body, '[/code]'));
+        $this->assertStringNotContainsString('[toall]', $body);
+        $this->assertStringNotContainsString('[To:1]', $body);
+        $this->assertStringContainsString('[code]select * from `t` where `a` = ? and ? = ?/?to?[/code]', $body);
+    }
+
+    #[Test]
+    public function MySQLでない接続では_SQLの形を出さず今までどおりログを指す(): void
+    {
+        $body = $this->reporter()->body($this->queryFailure('pgsql', "select * from \"users\" where \"email\" = '" . self::SECRET . "'"));
+
+        $this->assertStringNotContainsString('SQL の形', $body);
+        $this->assertStringNotContainsString('下の枠', $body);
+        $this->assertStringNotContainsString(self::SECRET, $body);
+    }
+
+    #[Test]
+    public function SQLの形を組み立てられなければ_枠を出さずSQLはログと書く(): void
+    {
+        $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
+        $pdo->errorInfo = ['23000', 1062, "Duplicate entry 'x' for key 'k'"];
+        $e = new class ('mysql', 'select 1', [], $pdo, ['driver' => 'mysql']) extends \Illuminate\Database\QueryException {
+            public function getSql(): string
+            {
+                throw new RuntimeException('probe');
+            }
+        };
+
+        $body = $this->reporter()->body($e);
+
+        $this->assertStringContainsString("Duplicate entry '（伏せた）' for key 'k' (Connection: mysql, SQL: （ログ）)[/code]説明: ", $body);
+        $this->assertStringNotContainsString('SQL の形', $body);
+    }
+
+    #[Test]
+    public function 本文が長すぎれば_前後のコードの次にSQLの形を落とし_それでも超えればメッセージを詰める(): void
+    {
+        config(['rich-chatwork.message_max_length' => 100000]);
+        $pdo = new \PDOException('SQLSTATE[42S22]: Column not found: 1054 x');
+        $pdo->errorInfo = ['42S22', 1054, "Unknown column '" . str_repeat('c', 40000) . "' in 'field list'"];
+
+        $body = $this->reporter()->body($this->queryWith($pdo));
+
+        $this->assertLessThanOrEqual(30000, mb_strlen($body));
+        $this->assertStringContainsString('前後のコード: 長いので省いた（ログを見る）', $body);
+        $this->assertStringContainsString('SQL の形: 長いので省いた（ログを見る）', $body);
+        $this->assertStringNotContainsString('SQL の形（値は ?）', $body);
+        $this->assertMatchesRegularExpression('/\[code\]SQLSTATE\[42S22\]: Column not found: 1054 Unknown column \'c+…\[\/code\]/', $body);
+    }
+
+    #[Test]
+    public function 前後のコードを落として収まれば_SQLの形は残す(): void
+    {
+        config(['rich-chatwork.message_max_length' => 100000]);
+        $pdo = new \PDOException('SQLSTATE[42S22]: Column not found: 1054 x');
+        // 本文が 30,000 文字を少し超え、前後のコードを落とせば収まる長さ
+        $pdo->errorInfo = ['42S22', 1054, "Unknown column '" . str_repeat('c', 29400) . "' in 'field list'"];
+
+        $body = $this->reporter()->body($this->queryWith($pdo));
+
+        $this->assertLessThanOrEqual(30000, mb_strlen($body));
+        $this->assertStringContainsString('前後のコード: 長いので省いた（ログを見る）', $body);
+        $this->assertStringContainsString("SQL の形（値は ?）:\n[code]select * from `users`[/code]", $body);
     }
 
     #[Test]
@@ -1230,6 +1330,22 @@ final class ReporterTest extends TestCase
     private function failDeep(int $depth): RuntimeException
     {
         return $depth === 0 ? new RuntimeException('probe') : $this->failDeep($depth - 1);
+    }
+
+    /**
+     * 重複の失敗。SQL の値は呼び出し側から渡し、前後のコードに入らないよう離して作る
+     */
+    private function queryFailure(string $driver, string $sql): \Illuminate\Database\QueryException
+    {
+        $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
+        $pdo->errorInfo = ['23000', 1062, "Duplicate entry 'x' for key 'k'"];
+
+        return new \Illuminate\Database\QueryException($driver, $sql, [], $pdo, ['driver' => $driver, 'host' => 'db.internal', 'port' => 3306, 'database' => 'probe_db']);
+    }
+
+    private function queryWith(\PDOException $pdo): \Illuminate\Database\QueryException
+    {
+        return new \Illuminate\Database\QueryException('mysql', 'select * from `users`', [], $pdo, ['driver' => 'mysql']);
     }
 
     private function failWithMessage(string $message): RuntimeException

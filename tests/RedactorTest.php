@@ -261,6 +261,7 @@ final class RedactorTest extends PlainTestCase
             "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'v (Connection: a, SQL: x' for key 'k' ({$details}, SQL: insert into t values ('v (Connection: a, SQL: x'))",
             'SQLSTATE[23000] （伏せた） (Connection: a, SQL: （ログ）)',
         ];
+        yield '写された 2006' => ["SQLSTATE[HY000] [2006] MySQL server has gone away ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [2006] 接続が切れた（詳細はログ） (Connection: mysql, SQL: （ログ）)'];
         yield '写された 1044' => ["SQLSTATE[HY000] [1044] Access denied for user 'probe-user'@'%' to database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1044] （伏せた） (Connection: mysql, SQL: （ログ）)'];
         yield '写された 1049' => ["SQLSTATE[HY000] [1049] Unknown database 'probe_db' ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1049] （伏せた） (Connection: mysql, SQL: （ログ）)'];
         yield '写された 1130' => ["SQLSTATE[HY000] [1130] Host '10.0.0.1' is not allowed to connect ({$details}, SQL: select 1)", 'SQLSTATE[HY000] [1130] （伏せた） (Connection: mysql, SQL: （ログ）)'];

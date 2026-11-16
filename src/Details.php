@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Ad5\RichPhpChatwork;
 
+use Error;
 use ErrorException;
 use Exception;
 use Google\Service\Exception as GoogleServiceException;
 use GuzzleHttp\Exception\BadResponseException;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -17,7 +20,7 @@ use Throwable;
 use TypeError;
 
 /**
- * 例外の種類ごとに、値を含まない決まった部分だけを取り出す。件名の要約と「種類」の行はここから作る
+ * 例外の種類ごとに、値を含まない決まった部分だけを取り出す。件名の要約・「種類」の行・「説明」の行（Glossary の表）はここから作る
  *
  * 例外の項目（errorInfo・getSeverity() など）から取れるものはそこから取り、文言しかないものは次の形でだけ読む。
  *
@@ -46,6 +49,15 @@ final class Details
 
     /** PHP が作るメモリ切れ */
     private const MEMORY = '/\AAllowed memory size of (\d{1,20}) bytes exhausted(?: \(tried to allocate \d{1,20} bytes\))?\z/';
+
+    /** PHP が作る実行時間の上限 */
+    private const EXECUTION_TIME = '/\AMaximum execution time of (\d{1,10}) seconds? exceeded\z/';
+
+    /** PHP が作る null のメソッド呼び出し。メソッドの名前だけを取る */
+    private const CALL_ON_NULL = '/\ACall to a member function ([A-Za-z0-9_]{1,64})\(\) on null\z/';
+
+    /** 番号の表（Glossary）と SQL の形（SqlShape）を使うドライバー */
+    private const MYSQL_DRIVERS = ['mysql', 'mariadb'];
 
     /** Laravel のスケジュール（schedule:run）が作るコマンドの失敗 */
     private const SCHEDULE = '/\AScheduled command \[(.{1,1000})\] failed with exit code \[(\d{1,3})\]\.\z/s';
@@ -81,7 +93,13 @@ final class Details
     {
         $process = ProcessFailure::of($e);
         if ($process !== null) {
-            return new Kind($process->summary, $process->items);
+            return new Kind($process->summary, $process->items, $process->explanation);
+        }
+
+        // クラスだけで決まる物を先に見る（ArgumentCountError は TypeError の子なので、下の TypeError より先）
+        $short = Glossary::exception($e);
+        if ($short !== null) {
+            return new Kind($short, []);
         }
 
         return match (true) {
@@ -89,7 +107,8 @@ final class Details
             $e instanceof ErrorException => self::severity($e),
             $e instanceof TypeError => self::typeError($e),
             $e instanceof FatalError => self::fatal($e),
-            $e instanceof ConnectionException => new Kind('接続できない', []),
+            $e instanceof ConnectionException => new Kind(Glossary::connection($e->getPrevious()), []),
+            $e::class === Error::class => self::error($e),
             $e::class === Exception::class => self::schedule($e),
             default => self::status($e),
         };
@@ -144,6 +163,31 @@ final class Details
         return $state !== null && (str_starts_with($state, '08') || ($state === 'HY000' && in_array($driver, self::OUTAGE_DRIVERS, true)));
     }
 
+    /**
+     * 接続のドライバー（mysql・mariadb・pgsql など）。Laravel が例外に添えた接続の詳細から取り、無ければ設定（database.connections.{接続名}.driver）を見る。
+     * DB へは問い合わせない
+     */
+    public static function driver(QueryException $e): ?string
+    {
+        return self::connectionSetting($e, 'driver');
+    }
+
+    /**
+     * 接続の設定のデータベース名（SQL の形で {db} に替える）。取り方は driver() と同じ
+     */
+    public static function database(QueryException $e): ?string
+    {
+        return self::connectionSetting($e, 'database');
+    }
+
+    /**
+     * MySQL・MariaDB の接続か
+     */
+    public static function isMysql(QueryException $e): bool
+    {
+        return in_array(self::driver($e), self::MYSQL_DRIVERS, true);
+    }
+
     public static function status(Throwable $e): Kind
     {
         $status = match (true) {
@@ -158,21 +202,26 @@ final class Details
         }
 
         $items = [self::item('HTTP の状態', (string) $status, true)];
-        $summary = "HTTP {$status}";
+        $reasons = [];
 
         if ($e instanceof GoogleServiceException) {
+            /** @var list<string> $reasons */
             $reasons = collect($e->getErrors() ?? [])
                 ->map(static fn (array $error): mixed => $error['reason'] ?? null)
                 ->filter(static fn (mixed $reason): bool => is_string($reason) && preg_match(self::GOOGLE_REASON, $reason) === 1)
                 ->unique()
-                ->implode(', ');
-            if ($reasons !== '') {
-                $items[] = self::item('Google の reason', $reasons, true);
-                $summary .= "・reason {$reasons}";
+                ->values()
+                ->all();
+            if ($reasons !== []) {
+                $items[] = self::item('Google の reason', implode(', ', $reasons), true);
             }
         }
 
-        return new Kind($summary, $items);
+        // reason が複数でも、言葉は最初の 1 つから引く
+        $term = Glossary::http($status, $reasons[0] ?? null);
+        $summary = self::join($term['short'] ?? null, $reasons === [] ? null : 'reason ' . implode(', ', $reasons), "HTTP {$status}");
+
+        return new Kind($summary, $items, $term['explanation'] ?? null);
     }
 
     private static function query(QueryException $e): Kind
@@ -200,14 +249,19 @@ final class Details
             $items[] = self::item('列', $column, true);
         }
 
-        $summary = match (true) {
-            $state === null => null,
-            self::isConnectionFailure($state, $driver) => "SQLSTATE {$state}・接続できない",
-            $column !== null => "SQLSTATE {$state}・列 {$column}",
-            default => "SQLSTATE {$state}",
-        };
+        if ($state === null) {
+            return new Kind(null, $items);
+        }
 
-        return new Kind($summary, $items);
+        $term = Glossary::database($state, $driver, self::isMysql($e));
+        $short = $term['short'] ?? null;
+        if (self::isConnectionFailure($state, $driver)) {
+            $words = KnownMessage::connectionWords($driver, $previous?->getMessage() ?? '');
+            // 「名前が引けない」は表の「接続できない」（2002）より細かいので、そちらを取る
+            $short = $words === KnownMessage::NAME_LOOKUP_WORDS ? $words : ($short ?? $words);
+        }
+
+        return new Kind(self::join($short, $column === null ? null : "列 {$column}", "SQLSTATE {$state}"), $items, $term['explanation'] ?? null);
     }
 
     private static function severity(ErrorException $e): Kind
@@ -238,6 +292,9 @@ final class Details
 
     private static function fatal(FatalError $e): Kind
     {
+        if (preg_match(self::EXECUTION_TIME, $e->getMessage(), $match) === 1) {
+            return new Kind("実行時間の上限（{$match[1]} 秒）", [self::item('実行時間の上限', "{$match[1]} 秒", true)]);
+        }
         if (preg_match(self::MEMORY, $e->getMessage(), $match) !== 1) {
             return new Kind(null, []);
         }
@@ -245,6 +302,15 @@ final class Details
         $megabytes = intdiv((int) $match[1], 1024 * 1024);
 
         return new Kind("メモリ切れ（上限 {$megabytes} MB）", [self::item('メモリの上限', "{$megabytes} MB", true)]);
+    }
+
+    private static function error(Error $e): Kind
+    {
+        if (preg_match(self::CALL_ON_NULL, $e->getMessage(), $match) !== 1) {
+            return new Kind(null, []);
+        }
+
+        return new Kind("null の {$match[1]}() を呼んだ", [self::item('呼んだメソッド', "{$match[1]}()", true)]);
     }
 
     /**
@@ -260,12 +326,40 @@ final class Details
         $artisan = array_find_key($words, static fn (string $word): bool => $word === 'artisan' || str_ends_with($word, '/artisan'));
         $name = is_int($artisan) ? ($words[$artisan + 1] ?? null) : null;
         $exit = self::item('終了コード', $match[2], true);
+        $term = Glossary::exitCode((int) $match[2]);
 
         if (! is_string($name) || preg_match(self::COMMAND, $name) !== 1) {
-            return new Kind("スケジュールのコマンドの失敗・終了コード {$match[2]}", [$exit]);
+            return new Kind(self::join('スケジュールのコマンドの失敗', $term['short'] ?? null, "終了コード {$match[2]}"), [$exit], $term['explanation'] ?? null);
         }
 
-        return new Kind("スケジュール {$name}・終了コード {$match[2]}", [self::item('スケジュールのコマンド', $name, true), $exit]);
+        return new Kind(self::join("スケジュール {$name}", $term['short'] ?? null, "終了コード {$match[2]}"), [self::item('スケジュールのコマンド', $name, true), $exit], $term['explanation'] ?? null);
+    }
+
+    /**
+     * 件名の要約を「短い言葉・決まった項目・番号」の順に「・」でつなぐ。件名は後ろから切るので、切れるときは番号から落ちる（番号は本文の枠に残る）
+     */
+    public static function join(?string ...$parts): string
+    {
+        return implode('・', array_filter($parts, static fn (?string $part): bool => $part !== null && $part !== ''));
+    }
+
+    private static function connectionSetting(QueryException $e, string $key): ?string
+    {
+        $value = $e->getConnectionDetails()[$key] ?? null;
+        if (is_string($value) && $value !== '') {
+            return $value;
+        }
+
+        // 部品は Laravel の中で動くが、テストや Laravel の外で作った例外では設定が無いことがある
+        try {
+            $container = Container::getInstance();
+            $config = $container->bound('config') ? $container->make('config') : null;
+            $value = $config instanceof ConfigRepository ? $config->get("database.connections.{$e->getConnectionName()}.{$key}") : null;
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_string($value) && $value !== '' ? $value : null;
     }
 
     /**

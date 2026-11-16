@@ -48,6 +48,10 @@ final class KnownMessageTest extends PlainTestCase
         yield '構文' => ['42000', 1064, 'Syntax error or access violation', "You have an error in your SQL syntax; check the manual for the right syntax to use near '= 'probe-secret'' at line 1", "You have an error in your SQL syntax; check the manual for the right syntax to use near '（伏せた）' at line 1"];
         yield '外部キー' => ['23000', 1452, 'Integrity constraint violation', 'Cannot add or update a child row: a foreign key constraint fails (`probe_db`.`scores`, CONSTRAINT `fk` FOREIGN KEY (`employee_id`) REFERENCES `employees` (`id`))', 'Cannot add or update a child row: a foreign key constraint fails (（伏せた）)'];
         yield 'null' => ['23000', 1048, 'Integrity constraint violation', "Column 'name' cannot be null", "Column 'name' cannot be null"];
+        yield '数値が範囲外' => ['22003', 1264, 'Numeric value out of range', "Out of range value for column 'score' at row 1", "Out of range value for column 'score' at row 1"];
+        yield '既定値の無い列' => ['HY000', 1364, 'General error', "Field 'name' doesn't have a default value", "Field 'name' doesn't have a default value"];
+        yield 'ロック待ちの時間切れ' => ['HY000', 1205, 'General error', 'Lock wait timeout exceeded; try restarting transaction', 'Lock wait timeout exceeded; try restarting transaction'];
+        yield 'デッドロック' => ['40001', 1213, 'Serialization failure', 'Deadlock found when trying to get lock; try restarting transaction', 'Deadlock found when trying to get lock; try restarting transaction'];
     }
 
     #[Test]
@@ -77,6 +81,7 @@ final class KnownMessageTest extends PlainTestCase
         yield '認証' => ['mysql', "SQLSTATE[HY000] [1045] Access denied for user 'probe-user'@'10.0.0.1' (using password: YES)", 'SQLSTATE[HY000] [1045] 認証に失敗（詳細はログ） (Connection: mysql)'];
         yield '名前が引けない' => ['mysql', 'SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for db.internal failed: Name or service not known', 'SQLSTATE[HY000] [2002] 名前が引けない（詳細はログ） (Connection: mysql)'];
         yield 'つながらない' => ['mysql', 'SQLSTATE[HY000] [2002] Connection refused', 'SQLSTATE[HY000] [2002] 接続できない（詳細はログ） (Connection: mysql)'];
+        yield '切れた' => ['mysql', 'SQLSTATE[HY000] [2006] MySQL server has gone away', 'SQLSTATE[HY000] [2006] 接続が切れた（詳細はログ） (Connection: mysql)'];
         yield 'pgsql' => ['pgsql', 'SQLSTATE[08006] [7] connection to server at "db.internal" (10.0.0.1), port 5432 failed: FATAL:  password authentication failed for user "probe-user"', 'SQLSTATE[08006] [7] 接続できない（詳細はログ） (Connection: pgsql)'];
     }
 
@@ -92,6 +97,30 @@ final class KnownMessageTest extends PlainTestCase
 
         $this->assertSame($expected, $message);
         $this->assertNoValues($message);
+    }
+
+    #[Test]
+    public function 許可リストの外の値を含む形は_足した形にも当たらない(): void
+    {
+        // 値の入る所の無い形だけを足した。名前の所に ' があれば外す
+        $e = $this->query('22003', 1264, 'Numeric value out of range', "Out of range value for column 'probe-value' or 'x' at row 1");
+
+        $this->assertSame('SQLSTATE[22003] ドライバー 1264（文言はログ） (Connection: mysql)', KnownMessage::of($e));
+    }
+
+    #[Test]
+    public function SQLの形を別の枠に出すときは_どの形でもSQLは下の枠と書く(): void
+    {
+        $allowed = $this->query('22001', 1406, 'String data, right truncated', "Data too long for column 'name' at row 1");
+        $other = $this->query('42000', 1142, 'Syntax error or access violation', "SELECT command denied to user 'probe-user'@'10.0.0.1' for table 'secrets'");
+        $pdo = new PDOException('SQLSTATE[HY000] [2002] Connection refused', 2002);
+        $connection = new QueryException('mysql', 'select 1', [], $pdo, ['driver' => 'mysql']);
+        $notPdo = new QueryException('mysql', 'select 1', [], new RuntimeException('probe-secret'));
+
+        $this->assertSame("SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: 下の枠)", KnownMessage::of($allowed, true));
+        $this->assertSame('SQLSTATE[42000] ドライバー 1142（文言はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($other, true));
+        $this->assertSame('SQLSTATE[HY000] [2002] 接続できない（詳細はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($connection, true));
+        $this->assertSame('（文言はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($notPdo, true));
     }
 
     #[Test]
@@ -127,6 +156,14 @@ final class KnownMessageTest extends PlainTestCase
         $this->assertSame('接続できない', KnownMessage::of(new ConnectionException('cURL error 6: probe-user')));
     }
 
+    #[Test]
+    public function HTTPの接続の時間切れは_接続できないと言わない(): void
+    {
+        $guzzle = new \GuzzleHttp\Exception\ConnectTimeoutException('cURL error 28: probe-user', new Psr7Request('GET', 'https://api.example.test/v1/users?token=probe-secret'));
+
+        $this->assertSame('接続の時間切れ: https://api.example.test', KnownMessage::of(new ConnectionException($guzzle->getMessage(), 0, $guzzle)));
+    }
+
     /**
      * @return iterable<string, array{list<string>}>
      */
@@ -154,7 +191,7 @@ final class KnownMessageTest extends PlainTestCase
 
         foreach ([$laravel, $symfony] as $e) {
             $this->assertSame('外のコマンドの失敗（終了コード 2、コマンドラインはログ）', KnownMessage::of($e));
-            $this->assertSame('外のコマンドの失敗・終了コード 2', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+            $this->assertSame('外のコマンドの失敗・使い方の誤り・終了コード 2', \Ad5\RichPhpChatwork\Details::of($e)->summary);
         }
     }
 
@@ -196,6 +233,17 @@ final class KnownMessageTest extends PlainTestCase
         $e = new \Symfony\Component\Process\Exception\RunProcessFailedException(new \Symfony\Component\Process\Exception\ProcessFailedException($process), $context);
 
         $this->assertSame('外のコマンドの失敗（終了コード 3、コマンドラインはログ）', KnownMessage::of($e));
+    }
+
+    #[Test]
+    public function 外のコマンドが強制終了されたら_件名に短い言葉を足し説明を添える(): void
+    {
+        $process = new \Symfony\Component\Process\Process(['sh', '-c', 'exit 137', '--', '-pS3cretPw']);
+        $process->run();
+        $kind = \Ad5\RichPhpChatwork\Details::of(new \Symfony\Component\Process\Exception\ProcessFailedException($process));
+
+        $this->assertSame('外のコマンドの失敗・強制終了（SIGKILL）・終了コード 137', $kind->summary);
+        $this->assertSame('外から強制終了された（メモリ不足で OS が止めた場合を含む）', $kind->explanation);
     }
 
     private function timedOut(float $seconds): \Symfony\Component\Process\Exception\ProcessTimedOutException
