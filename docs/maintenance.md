@@ -26,6 +26,8 @@ PHPStan は level 10（`src`・`config`・`tests`）。両方が通ってから�
 | 伏せる規則 | `tests/RedactorTest.php` |
 | 組み立て直す文言 | `tests/KnownMessageTest.php` |
 | 種類ごとの部分と件名の要約 | `tests/DetailsTest.php` |
+| 番号に添える言葉 | `tests/GlossaryTest.php` |
+| SQL の形 | `tests/SqlShapeTest.php` |
 | 名前の整形 | `tests/NamesTest.php` |
 | 本文の例 | `tests/ExamplesTest.php`（作り物のアプリを一時ディレクトリに作る `FixtureApp`） |
 | 並び・長さ・間引き・上限・失敗したときの動き | `tests/ReporterTest.php` |
@@ -42,6 +44,17 @@ PHPStan は level 10（`src`・`config`・`tests`）。両方が通ってから�
 5. 「種類」の行と重ならないか見る（組み立てた文言に入った値は「種類」から外れる）
 
 DB のドライバーの文言の形を足すときは、`DriverMessage` の `SHAPES`（組み立て用）と `IN_PLACE`（写された文言をその場で伏せる用）の両方に足す。
+
+## 番号に添える言葉を足す
+
+1. 公式の資料で番号・SQLSTATE・状態の意味を確かめる（推測で書かない。原因を断定しない）
+2. `GlossaryTest` に足す。表に無い値で何も返らないことも見る
+3. `Glossary` の表に足す。説明に ASCII の `(` `)` `:` を使わない（`GlossaryTest` が見る）
+4. [message-format.md](message-format.md#番号に添える言葉) の引く順が変わるなら直す
+
+## SQL の形の許可リストに語を足す
+
+`SqlShape::KEYWORDS` に足すのは SQL のキーワードと関数・型の名前だけ。ふつうの値になりうる語（状態の語・名前など）は足さない（`whereRaw("status = active")` の `active` が残る）。足したら `SqlShapeTest` に、その語が残る例と、値が残らない例を足す。
 
 ## 伏せる規則を足す
 
@@ -64,7 +77,8 @@ DB のドライバーの文言の形を足すときは、`DriverMessage` の `SH
 | `Illuminate/Console/Events/CommandFinished.php`・`Illuminate/Foundation/Http/Events/RequestHandled.php` | 入口の終わり（sync で残したジョブの ID を戻す） | ジョブの ID が入口の後まで残る |
 | `Illuminate/Queue/SyncQueue.php`（`executeJob`・`handleException`） | 失敗のイベントの後、`JobAttempted`（finally）を出して例外を呼び出し元まで投げる。ジョブは `SyncJob` | 同上 |
 | `Illuminate/Log/Context/ContextServiceProvider.php` | `JobProcessing` で Context を payload の物に入れ替える（hydrate は flush してから入れる）。部品の listener はこれより後に動く | ジョブの Request ID がディスパッチした側の物に戻る |
-| `Illuminate/Database/QueryException.php` | 文言の末尾が ` (Connection: …, SQL: …)`。接続の詳細（Host・Port・Database）が文言に入る。`errorInfo` を previous から写す | 写された文言の規則 1・組み立てが当たらない |
+| `Illuminate/Database/QueryException.php` | 文言の末尾が ` (Connection: …, SQL: …)`。接続の詳細（Host・Port・Database）が文言に入る。`errorInfo` を previous から写す。`getSql()` は値を埋める前の SQL、`getConnectionDetails()` に `driver`・`database` がある | 写された文言の規則 1・組み立てが当たらない。SQL の形が出ない（設定から取れなければ） |
+| `Illuminate/Database/Query/Grammars/MySqlGrammar.php`・`Grammar.php` | MySQL では識別子をバッククォートで包む。値を SQL に直接入れる道（`whereIntegerInRaw`・`limit`・JSON のパスなど）は [redaction.md](redaction.md#sql-の形) の表の通り | 表名・列名が `?` になる。新しい道が増えたら `SqlShapeTest` に足す |
 | `Illuminate/Http/Client/RequestException.php`・`Response.php` | `response->status()`・`effectiveUri()`・`transferStats` | URL が出ず `HTTP {状態}` だけになる |
 | `Illuminate/Http/Client/PendingRequest.php` | `ConnectionException` の previous が Guzzle の例外 | ホストが出ない |
 | `Illuminate/Process/Exceptions/*`・`symfony/process/Exception/*` | 終了コード（`result->exitCode()`・`getProcess()->getExitCode()`）と時間切れの秒数（`getExceededTimeout()`）が取れる。`ProcessStartFailedException` は `ProcessFailedException` を継承する。Messenger の `RunProcessFailedException` は `$context->exitCode`（`RunProcessContext` の `?int`）から取る。写したプロセスの文言の形（`The command "…" failed.`・`The process "…" exceeded the timeout`）を目印にしている | コマンドの失敗の要約が出ない（コマンドラインは出ない） |

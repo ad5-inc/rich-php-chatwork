@@ -49,12 +49,12 @@ flowchart TD
 ## 本文の組み立て（compose）
 
 1. **主に見る例外を決める**（`Chain`）。previous を最大 10 段辿り、外側から包む例外（既定 `ViewException`）を剥ぐ。剥いだ物は「包んだもの」、内側は「原因」（3 つまで）になる
-2. **種類ごとの部分を取る**（`Details` → `Kind`）。件名の要約と「種類」の行の項目
-3. **メッセージを作る**。形の分かる例外は組み立て直す（`KnownMessage`）。それ以外は元の文言を、省かずに伏せる（`Redactor`）
+2. **種類ごとの部分を取る**（`Details` → `Kind`）。件名の要約・「種類」の行の項目・「説明」の行（番号に添える決まった日本語は `Glossary`）
+3. **メッセージを作る**。形の分かる例外は組み立て直す（`KnownMessage`）。それ以外は元の文言を、省かずに伏せる（`Redactor`）。DB の例外（MySQL・MariaDB の接続）は、値を `?` にした SQL の形も作る（`SqlShape`）
 4. **アプリの行を決める**（`Source::appLine`）。前後のコードは `app/`・`routes/` の中だけ読む（`Snippet`）
 5. **入口を決める**。ジョブ → コマンド → HTTP の順（`JobEntrance`・`Reporter::entrance`）
 6. **呼び出しの並び**（`Trace`、アプリの段を 10 段まで）
-7. **並べる**（`Body`）。30,000 文字を超えたら、呼び出しの並び → 前後のコードの順に塊で落とし、まだ超えればメッセージを詰める。送る直前にも数え、超えていたら、件名は普通のまま本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える
+7. **並べる**（`Body`）。30,000 文字を超えたら、呼び出しの並び → 前後のコード → SQL の形の順に塊で落とし、まだ超えればメッセージを詰める。送る直前にも数え、超えていたら、件名は普通のまま本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える
 
 本文に入る値は、項目ごとに `Text::field()` を通す。順番を入れ替えると壊れる。
 
@@ -71,8 +71,10 @@ flowchart TD
 | `RichChatworkServiceProvider` | 設定の読み込み・登録・`reportable()` とキューのイベントの登録 |
 | `Reporter` | 入口。送るかの判断・間引き・上限・組み立て・送る・失敗したときの動き |
 | `Chain` | previous のつながり。主に見る例外・包んだもの・原因・包んだビュー |
-| `Details` / `Kind` | 例外の種類ごとの、値を含まない部分（件名の要約と項目） |
+| `Details` / `Kind` | 例外の種類ごとの、値を含まない部分（件名の要約・項目・説明） |
+| `Glossary` | 番号・SQLSTATE・HTTP の状態・Google の reason・終了コード・例外のクラスに添える決まった日本語の表 |
 | `KnownMessage` | 形の分かる例外（DB・HTTP クライアント・プロセス）の文言を組み立て直す |
+| `SqlShape` | DB の例外の SQL を、字句の許可リストで値を `?` にした形にする（MySQL・MariaDB だけ） |
 | `DriverMessage` | DB のドライバーの文言の許可リスト |
 | `Redactor` | 伏せる規則（文言・notice・前後のコード・リクエスト） |
 | `Text` | 値の通し方（直す・逃がす・切る）と、失敗を null で返す置き換え |
@@ -95,9 +97,9 @@ flowchart TD
 | ゴール | 主な仕組み | 場所 |
 | --- | --- | --- |
 | 1 黙殺しない | 最小の知らせ・送る直前の長さの守り・送信の失敗で印を消す・失敗をログへ・送り先が空の警告・`reportable()` の中を包む・予備の置き場 | `RichChatworkServiceProvider`・`Reporter`・`Throttle` |
-| 2 秘密を出さない | 組み立て直す（許可リスト）・値の書き出しを含む文言は省く・伏せる規則・接続先を出さない・引数の値を出さない・トークンと本文の引数に `#[\SensitiveParameter]` | `KnownMessage`・`DriverMessage`・`Redactor`・`Trace`・`Transport` |
+| 2 秘密を出さない | 組み立て直す（許可リスト）・値の書き出しを含む文言は省く・伏せる規則・接続先を出さない・SQL は値を `?` にした形だけ・引数の値を出さない・トークンと本文の引数に `#[\SensitiveParameter]` | `KnownMessage`・`DriverMessage`・`SqlShape`・`Redactor`・`Trace`・`Transport` |
 | 3 個人情報を出さない | 文言は既定で送らない・メール・電話番号・マイナンバー・口座番号を伏せる・利用者は内部 ID だけ | `Redactor`・`Reporter` |
-| 4 種類が分かり、ログを引ける | 件名の要約・Request ID（ログに付く ID と揃える）・ジョブの新しい ID と発端の ID | `Details`・`JobEntrance` |
+| 4 種類が分かり、ログを引ける | 件名の要約・番号に添える説明・SQL の形・Request ID（ログに付く ID と揃える）・ジョブの新しい ID と発端の ID | `Details`・`Glossary`・`SqlShape`・`JobEntrance` |
 | 5 誤って判断しない | アプリの行（TypeError は呼び出し側）・入口の順・回数と時刻（アプリのタイムゾーン） | `Source`・`Reporter` |
 | 6 部屋を壊さない | 記法の逃がし・項目と全体の長さ・同じ例外の間引き・全体の上限 | `Text`・`Body`・`Throttle` |
 | 7 使う側を壊さない | 公開の口と設定のキーを保つ。型の違う設定は既定に戻す | `Settings`・[CHANGELOG](../CHANGELOG.md) |

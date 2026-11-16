@@ -7,6 +7,9 @@
 ```text
 [info][title]{件名}[/title]
 [code]{メッセージ}[/code]                    ← 文言があれば必ず（形の分かる例外は組み立て直した物、ほかは伏せた物。省かない）
+説明: {何が起きたか＋見る所}                  ← 番号などが表に当たったときだけ
+SQL の形（値は ?）:                           ← DB の例外（MySQL・MariaDB の接続）で、形を組み立てられたときだけ
+[code]{SQL の形}[/code]
 種類: {件名に入らなかった項目}                ← 無ければ出さない
 包んだもの: …                                 ← あるときだけ
 原因: …                                       ← あるときだけ（3 行まで）
@@ -25,7 +28,9 @@ Request ID: {値}（中身はログをこの番号で引く）
 - 「包んだもの」は剥いだ例外の短い名前を `・` でつなぎ、ビューが分かれば「（ビュー resources/views/x.blade.php）」を足す（入れ子なら一番内側）
 - 「原因」は `原因: クラス（相対パス:行）`。文言は出さない。QueryException の中の PDOException は出さない
 - 呼び出しの並びが空なら、横線と枠を出さず「呼び出しの並び: 取れない」
-- 本文は 30,000 文字まで。超えたら呼び出しの並びを「呼び出しの並び: 長いので省いた（ログを見る）」に、まだ超えれば前後のコードを「前後のコード: 長いので省いた（ログを見る）」に置き換え、それでも超えればメッセージを詰める（末尾に `…`）。送る直前にまだ超えていたら、本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える（件名は普通のまま。下の「最小の知らせ」）
+- 「説明」の行は決まった文だけ（下の「番号に添える言葉」）。表に当たらなければ出さない
+- SQL の形を出すときは、メッセージの末尾を `SQL: 下の枠` にする。出さないとき（MySQL・MariaDB 以外の接続、組み立ての失敗）は今までどおり `SQL: （ログ）` か `(Connection: …)` だけ
+- 本文は 30,000 文字まで。超えたら呼び出しの並びを「呼び出しの並び: 長いので省いた（ログを見る）」に、まだ超えれば前後のコードを「前後のコード: 長いので省いた（ログを見る）」に、まだ超えれば SQL の形を「SQL の形: 長いので省いた（ログを見る）」に置き換え、それでも超えればメッセージを詰める（末尾に `…`）。送る直前にまだ超えていたら、本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える（件名は普通のまま。下の「最小の知らせ」）
 - Request ID が無ければ「Request ID: （無し）」
 
 ### 項目の長さ（表示幅。全角は 2）
@@ -38,26 +43,47 @@ Request ID: {値}（中身はログをこの番号で引く）
 | Request ID・利用者・コマンド | 100 |
 | 種類・包んだもの・原因・アプリの行・notice の行と枠の 1 行 | 500 |
 | 前後のコードの 1 行 | 160 |
+| SQL の形 | 600（超えたら末尾を `…（長いので省いた。全文はログ）`） |
 
 ## 件名
 
 `{title}{短いクラス名}: {要約}`。`title` の既定は `{app}（{env}）`。要約が無ければ `: ` も付けない。文言は入れない（スマホのロック画面に出るため）。
 
+要約は「短い言葉・決まった項目・番号」の順に `・` でつなぐ。件名は 80 の幅で後ろから切るので、切れるときは番号から落ちる（番号は本文の枠に必ず残る）。
+
 短いクラス名は名前空間を外した物。PHP の組み込みの例外と同じ名前（`Exception`・`RuntimeException` など）なら 1 段上を付ける（`Service\Exception`）。匿名クラスは `RuntimeException@anonymous`。
 
 | 例外 | 要約 |
 | --- | --- |
-| `QueryException` | `SQLSTATE 42S22`。22001 は `SQLSTATE 22001・列 name`。接続の失敗は `SQLSTATE HY000・接続できない` |
+| `QueryException` | `列が無い・SQLSTATE 42S22`。22001 は `文字が長すぎる・列 name・SQLSTATE 22001`。接続の失敗は `接続できない・SQLSTATE HY000`（`認証に失敗`・`名前が引けない`・`接続が切れた` など）。表に無ければ `SQLSTATE HY000` |
 | `ErrorException` | `PHP の警告（E_WARNING）` など |
 | `TypeError` | `SyncService::run() 引数 #1 int←null` |
-| `FatalError`（メモリ切れ） | `メモリ切れ（上限 512 MB）` |
-| スケジュールのコマンドの失敗（素の `Exception`） | `スケジュール report:daily・終了コード 1`。名前が取れなければ `スケジュールのコマンドの失敗・終了コード 1` |
-| `RequestException`・素の Guzzle の `BadResponseException`（`ClientException` など） | `HTTP 503` |
-| `ConnectionException` | `接続できない` |
-| プロセスの例外（Laravel・Symfony） | `外のコマンドの失敗・終了コード 2`・`外のコマンドの時間切れ・60 秒`・`外のコマンドを起動できなかった` |
-| Google の API | `HTTP 403・reason rateLimitExceeded` |
+| `FatalError` | `メモリ切れ（上限 512 MB）`・`実行時間の上限（30 秒）` |
+| `Error`（null のメソッド呼び出し） | `null の save() を呼んだ`（メソッドの名前だけ） |
+| クラスで決まる例外 | `ジョブの試行回数の上限`・`ジョブの時間切れ`・`0 で割った`・`引数の数の誤り`・`match に当たる場合が無い`・`受け付けない値`・`JSON の読み書きの失敗`（文言は読まない） |
+| スケジュールのコマンドの失敗（素の `Exception`） | `スケジュール report:daily・失敗を返した・終了コード 1`。名前が取れなければ `スケジュールのコマンドの失敗・失敗を返した・終了コード 1` |
+| `RequestException`・素の Guzzle の `BadResponseException`（`ClientException` など） | `相手が一時停止・HTTP 503` |
+| `ConnectionException` | `接続できない`。Guzzle の例外のクラスで `接続の時間切れ`・`応答の時間切れ` を言い分ける |
+| プロセスの例外（Laravel・Symfony） | `外のコマンドの失敗・強制終了（SIGKILL）・終了コード 137`・`外のコマンドの時間切れ・60 秒`・`外のコマンドを起動できなかった` |
+| Google の API | `回数の上限・reason rateLimitExceeded・HTTP 403` |
 
 文言から取る物は、種類ごとの形を文言の先頭から末尾まで当て、名前の文字だけを取る。形が合わなければ要約を出さない。
+
+## 番号に添える言葉
+
+件名の短い言葉と「説明: 」の行は、決まった表から引く（表は `src/Glossary.php`）。キーは番号・SQLSTATE・状態・reason・終了コード・クラスだけで、元の文言は写さない。
+
+| 種類 | 引く順 | 根拠 |
+| --- | --- | --- |
+| DB | MySQL・MariaDB の接続なら MySQL の番号 → SQLSTATE（完全一致）。ほかのドライバーは SQLSTATE だけ（番号がぶつかるため。SQL Server の 1205 はデッドロック） | MySQL 8.4 Error Reference、ODBC の SQLSTATE、PostgreSQL の番号 |
+| HTTP の状態 | Google の reason（最初の 1 つ）→ 状態。状態は外の相手の応答なので「相手が」で書く | RFC 9110 §15、RFC 6585 §4、Google の Global domain errors |
+| 終了コード | 表（1・2・126・127・130・134・137・139・143）→ 129〜159 は「シグナル N」 | Bash の Exit Status、Symfony Process・Console |
+| 例外のクラス | 子のクラスを先に見る | PHP マニュアル、Laravel |
+
+- 表に無い値には何も足さない。SQLSTATE の頭 2 文字で推測しない（42 は構文と権限が混ざる）。HY000（一般のエラー）にも足さない
+- 23000 は一意・外部キー・NOT NULL のどれでも来るので、SQLSTATE の表では「制約に反した（どれかは番号を見る）」と言い、言い分けは MySQL の番号でする
+- 原因を断定しない（137 は「メモリ不足で OS が止めた場合を含む」、2006 は「接続が切れていた」だけ）
+- 説明には ASCII の `(` `)` `:` を使わない（絵文字の記号に当たらないよう全角にする）
 
 ## アプリの行
 
@@ -137,7 +163,7 @@ Request ID: 3f2a…（ジョブの中のログ）
 本文が長すぎて替えたときは、件名は普通の件名と同じ（要約の後ろから切る）にし、本文の 1 行目で言い分ける。
 
 ```text
-[info][title]example-app（production）QueryException: SQLSTATE 23000[/title]長すぎて省いた（ログを見る）
+[info][title]example-app（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）
 Request ID: req-1（中身はログをこの番号で引く）[/info]
 ```
 
@@ -146,7 +172,9 @@ Request ID: req-1（中身はログをこの番号で引く）[/info]
 ### DB の値の長さの失敗（HTTP）
 
 ```text
-[info][title]example-app（production）QueryException: SQLSTATE 22001・列 name[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
+[info][title]example-app（production）QueryException: 文字が長すぎる・列 name・SQLSTATE 22001[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: 下の枠)[/code]説明: 列の長さを超える文字列を入れようとした
+SQL の形（値は ?）:
+[code]update `employees` set `name` = ?, `updated_at` = ? where `id` = ?[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
 [code]  40 | $param = EmployeeParam::from($request);
   41 |
 > 42 | $employee->update($param->toArray());
@@ -163,7 +191,9 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 ### ビューの中の DB の例外
 
 ```text
-[info][title]example-app（production）QueryException: SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: （ログ）)[/code]包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
+[info][title]example-app（production）QueryException: 列が無い・SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: 下の枠)[/code]説明: SQL が無い列を指している。マイグレーションの流し忘れか列名の誤りを見る
+SQL の形（値は ?）:
+[code]select * from `employees` where `nme` = ? and `employees`.`deleted_at` is null[/code]包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
 アプリの行: app/Models/Employee.php:120（vendor の Connection.php:825 で投げた）
 [code]…[/code]リクエスト: GET /employees/{employee} ／ 利用者: 7
 Request ID: …（中身はログをこの番号で引く）
@@ -184,7 +214,8 @@ Request ID: …（中身はログをこの番号で引く）
 ### 外の API の失敗（Webhook）
 
 ```text
-[info][title]example-app（production）RequestException: HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.com/services/{…}/{…}/{…}[/code]アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:1100 で投げた）
+[info][title]example-app（production）RequestException: 相手に無い・HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.com/services/{…}/{…}/{…}[/code]説明: 相手に無い URL・ID を指した
+アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:1100 で投げた）
 [code]…[/code]コマンド: report:daily
 Request ID: …（中身はログをこの番号で引く）
 [hr][code]…[/code][/info]
@@ -197,6 +228,39 @@ Request ID: …（中身はログをこの番号で引く）
 コマンド: report:daily
 Request ID: …（中身はログをこの番号で引く）
 呼び出しの並び: 取れない[/info]
+```
+
+### DB の例外の SQL の形
+
+重複（件名の短い言葉は MySQL の番号から）:
+
+```text
+[info][title]example-app（production）QueryException: 重複・SQLSTATE 23000[/title][code]SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '（伏せた）' for key 'users.users_email_unique' (Connection: mysql, SQL: 下の枠)[/code]説明: 一意のキー（主キー・unique）に、すでにある値を入れようとした
+SQL の形（値は ?）:
+[code]insert into `users` (`email`, `name`, `updated_at`, `created_at`) values (?, ?, ?, ?)[/code]アプリの行: …
+```
+
+外部キー（同じ形の行が続く insert は行の数で縮める）:
+
+```text
+[info][title]example-app（production）QueryException: 参照先が無い・SQLSTATE 23000[/title][code]SQLSTATE[23000]: Integrity constraint violation: 1452 Cannot add or update a child row: a foreign key constraint fails (（伏せた）) (Connection: mysql, SQL: 下の枠)[/code]説明: 外部キーの指す先の行が無い
+SQL の形（値は ?）:
+[code]insert into `evaluations` (`employee_id`, `period_id`, `score`) values (?, ?, ?) ×3[/code]アプリの行: …
+```
+
+接続の失敗（`[` の後ろが英字の `[HY000` は、記法の始まりとして `[` を全角にする）:
+
+```text
+[info][title]example-app（production）QueryException: 接続できない・SQLSTATE HY000[/title][code]SQLSTATE［HY000] [2002] 接続できない（詳細はログ） (Connection: mysql, SQL: 下の枠)[/code]説明: DB につながらない
+SQL の形（値は ?）:
+[code]select * from `sessions` where `id` = ? limit ?[/code]アプリの行: …
+```
+
+整数を直接並べる `whereIntegerInRaw` の大きな並び:
+
+```text
+SQL の形（値は ?）:
+[code]select * from `employees` where `employees`.`id` in (? ×1200) and `employees`.`deleted_at` is null[/code]
 ```
 
 ### notice
