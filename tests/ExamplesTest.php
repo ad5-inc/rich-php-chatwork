@@ -86,7 +86,8 @@ final class ExamplesTest extends TestCase
 
         $this->assertCount(2, $this->transport->sent);
         $this->assertSame(<<<'TEXT'
-            [info][title]example-app（production）QueryException: SQLSTATE 22001・列 name[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
+            [info][title]example-app（production）QueryException: 文字が長すぎる・列 name・SQLSTATE 22001[/title][code]SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: （ログ）)[/code]説明: 列の長さを超える文字列を入れようとした
+            アプリの行: app/UseCase/Actions/Employee/UpdateAction.php:42（vendor の Connection.php:825 で投げた）
             [code]  40 | $param = EmployeeParam::from($request);
               41 |
             > 42 | $employee->update($param->toArray());
@@ -106,7 +107,7 @@ final class ExamplesTest extends TestCase
     public function 例2_ビューの中のDBの例外(): void
     {
         $this->fixture->file('app/Models/Employee.php', [120 => 'return $query->where(\'nme\', $value);']);
-        $query = $this->queryFailure('42S22', 1054, 'Column not found', "Unknown column 'nme' in 'where clause'");
+        $query = $this->queryFailure('42S22', 1054, 'Column not found', "Unknown column 'nme' in 'where clause'", 'select * from `employees` where `nme` = ? and `employees`.`deleted_at` is null');
         self::fabricate($query, $this->fixture->path('vendor/laravel/framework/src/Illuminate/Database/Connection.php'), 825, [
             ...$this->fixture->vendorFrames(2),
             ['file' => $this->fixture->path('storage/framework/views/0123456789abcdef.php'), 'line' => 3, 'function' => 'scopeActive', 'class' => 'App\Models\Employee', 'type' => '->'],
@@ -123,7 +124,8 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($outer);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]example-app（production）QueryException: SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: （ログ）)[/code]包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
+            [info][title]example-app（production）QueryException: 列が無い・SQLSTATE 42S22[/title][code]SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nme' in 'where clause' (Connection: mysql, SQL: （ログ）)[/code]説明: SQL が無い列を指している。マイグレーションの流し忘れか列名の誤りを見る
+            包んだもの: ViewException（ビュー resources/views/employees/show.blade.php）
             アプリの行: app/Models/Employee.php:120（vendor の Connection.php:NNN で投げた）
             [code]…[/code]リクエスト: GET /employees/{employee} ／ 利用者: 7
             Request ID: …（中身はログをこの番号で引く）
@@ -177,7 +179,8 @@ final class ExamplesTest extends TestCase
         $this->reporter()->report($e);
 
         $this->assertMatchesExample(<<<'TEXT'
-            [info][title]example-app（production）RequestException: HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.example/services/{…}/{…}/{…}[/code]アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:NNN で投げた）
+            [info][title]example-app（production）RequestException: 相手に無い・HTTP 404[/title][code]HTTP 404 POST https://hooks.slack.example/services/{…}/{…}/{…}[/code]説明: 相手に無い URL・ID を指した
+            アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:NNN で投げた）
             [code]…[/code]コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
             [hr][code]…[/code][/info]
@@ -229,10 +232,14 @@ final class ExamplesTest extends TestCase
      */
     private function assertMatchesExample(string $example, string $body): void
     {
-        $pattern = preg_quote(str_replace(['…', 'NNN'], ['@@ANY@@', '@@NUM@@'], $example), '/');
-        $pattern = str_replace(['@@ANY@@', '@@NUM@@'], ['.*?', '\d+'], $pattern);
+        $this->assertMatchesRegularExpression('/\A' . $this->examplePattern($example) . '\z/su', $body);
+    }
 
-        $this->assertMatchesRegularExpression('/\A' . $pattern . '\z/su', $body);
+    private function examplePattern(string $example): string
+    {
+        $pattern = preg_quote(str_replace(['…', 'NNN'], ['@@ANY@@', '@@NUM@@'], $example), '/');
+
+        return str_replace(['@@ANY@@', '@@NUM@@'], ['.*?', '\d+'], $pattern);
     }
 
     private function overHttp(string $method, string $path, string $uri): void
@@ -244,11 +251,11 @@ final class ExamplesTest extends TestCase
         $this->app?->instance('request', $request);
     }
 
-    private function queryFailure(string $state, int $driver, string $stateText, string $driverMessage): QueryException
+    private function queryFailure(string $state, int $driver, string $stateText, string $driverMessage, string $sql = 'update `employees` set `name` = ?, `updated_at` = ? where `id` = ?'): QueryException
     {
         $pdo = new PDOException("SQLSTATE[{$state}]: {$stateText}: {$driver} {$driverMessage}");
         $pdo->errorInfo = [$state, $driver, $driverMessage];
 
-        return new QueryException('mysql', 'update employees set name = ? where id = ?', ['probe-value', 5], $pdo, ['driver' => 'mysql', 'host' => 'db.internal', 'port' => 3306, 'database' => 'probe_db']);
+        return new QueryException('mysql', $sql, ['probe-value', '2026-11-16 10:00:00', 5], $pdo, ['driver' => 'mysql', 'host' => 'db.internal', 'port' => 3306, 'database' => 'probe_db']);
     }
 }

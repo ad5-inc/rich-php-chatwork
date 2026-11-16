@@ -24,6 +24,9 @@ final class KnownMessage
 {
     public const FAILED = '（組み立てられなかったので省いた。ログを見る）';
 
+    /** 接続の失敗のうち、名前が引けないときの言葉（件名の要約は、表の言葉よりこちらを取る） */
+    public const NAME_LOOKUP_WORDS = '名前が引けない';
+
     /** ドライバー 2002 のうち、名前が引けないときの文言の手がかり（文言は出さず、言葉を選ぶためだけに読む） */
     private const NAME_LOOKUP = '/getaddrinfo|php_network_getaddresses|Name or service not known|nodename nor servname|Temporary failure in name resolution/i';
 
@@ -79,7 +82,9 @@ final class KnownMessage
     {
         return match (true) {
             $driver === 1045 => '認証に失敗',
-            $driver === 2002 && preg_match(self::NAME_LOOKUP, $driverMessage) === 1 => '名前が引けない',
+            $driver === 2002 && preg_match(self::NAME_LOOKUP, $driverMessage) === 1 => self::NAME_LOOKUP_WORDS,
+            // 2006（MySQL server has gone away）はつながった後に切れた物
+            $driver === 2006 => '接続が切れた',
             default => '接続できない',
         };
     }
@@ -105,7 +110,9 @@ final class KnownMessage
             ? self::origin($previous->getRequest()->getUri())
             : null;
 
-        return $origin === null ? '接続できない' : "接続できない: {$origin}";
+        $words = Glossary::connection($previous);
+
+        return $origin === null ? $words : "{$words}: {$origin}";
     }
 
     /**

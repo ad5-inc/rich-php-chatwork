@@ -388,6 +388,10 @@ final class Reporter
             $body->code($message, 'message');
         }
 
+        if ($kind->explanation !== null) {
+            $body->text(Text::field("説明: {$kind->explanation}", false, null, self::LINE_WIDTH));
+        }
+
         $kindLine = $this->kindLine($kind, $assembled !== null && $assembled !== KnownMessage::FAILED ? $assembled : null);
         if ($kindLine !== null) {
             $body->text($kindLine);

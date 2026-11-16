@@ -34,7 +34,7 @@ final class DetailsTest extends TestCase
         $e = $this->queryFailure('23000', 1062, "Duplicate entry 'taro@example.com' for key 'users.email'");
 
         $this->assertSame(['SQLSTATE: 23000', 'ドライバーの番号: 1062', '接続: mysql'], Details::lines($e));
-        $this->assertSame('SQLSTATE 23000', Details::of($e)->summary);
+        $this->assertSame('重複・SQLSTATE 23000', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -44,7 +44,7 @@ final class DetailsTest extends TestCase
         $e = $this->queryFailure('22001', 1406, "Data too long for column 'name' at row 1");
 
         $this->assertSame(['SQLSTATE: 22001', 'ドライバーの番号: 1406', '接続: mysql', '列: name'], Details::lines($e));
-        $this->assertSame('SQLSTATE 22001・列 name', Details::of($e)->summary);
+        $this->assertSame('文字が長すぎる・列 name・SQLSTATE 22001', Details::of($e)->summary);
     }
 
     #[Test]
@@ -61,7 +61,7 @@ final class DetailsTest extends TestCase
         $e = $this->connectFailure("SQLSTATE[HY000] [1045] Access denied for user 'taro@example.com'@'10.0.0.1' (using password: YES)");
 
         $this->assertSame(['SQLSTATE: HY000', 'ドライバーの番号: 1045', '接続: mysql'], Details::lines($e));
-        $this->assertSame('SQLSTATE HY000・接続できない', Details::of($e)->summary);
+        $this->assertSame('認証に失敗・SQLSTATE HY000', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -114,7 +114,6 @@ final class DetailsTest extends TestCase
 
         $this->assertSame(['メモリの上限: 128 MB'], Details::lines($e));
         $this->assertSame('メモリ切れ（上限 128 MB）', Details::of($e)->summary);
-        $this->assertSame([], Details::lines(new FatalError('Maximum execution time of 30 seconds exceeded', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1])));
     }
 
     #[Test]
@@ -123,7 +122,7 @@ final class DetailsTest extends TestCase
         $e = $this->plain("Scheduled command ['/home/deploy/php' 'artisan' report:daily --mail=taro@example.com] failed with exit code [1].");
 
         $this->assertSame(['スケジュールのコマンド: report:daily', '終了コード: 1'], Details::lines($e));
-        $this->assertSame('スケジュール report:daily・終了コード 1', Details::of($e)->summary);
+        $this->assertSame('スケジュール report:daily・失敗を返した・終了コード 1', Details::of($e)->summary);
         $body = $this->app?->make(Reporter::class)->body($e) ?? '';
         $this->assertStringContainsString("[code]Scheduled command ['/home/deploy/php' 'artisan' report:daily --mail=（伏せた）] failed with exit code [1].[/code]", $body);
         $this->assertStringNotContainsString('taro@example.com', $body);
@@ -135,7 +134,7 @@ final class DetailsTest extends TestCase
         $e = $this->plain("Scheduled command ['php' 'artisan' 'taro@example.com'] failed with exit code [2].");
 
         $this->assertSame(['終了コード: 2'], Details::lines($e));
-        $this->assertSame('スケジュールのコマンドの失敗・終了コード 2', Details::of($e)->summary);
+        $this->assertSame('スケジュールのコマンドの失敗・使い方の誤り・終了コード 2', Details::of($e)->summary);
     }
 
     #[Test]
@@ -155,7 +154,7 @@ final class DetailsTest extends TestCase
         ]);
 
         $this->assertSame(['HTTP の状態: 403', 'Google の reason: forbidden'], Details::lines($e));
-        $this->assertSame('HTTP 403・reason forbidden', Details::of($e)->summary);
+        $this->assertSame('拒否・reason forbidden・HTTP 403', Details::of($e)->summary);
         $this->assertNoValues($e);
     }
 
@@ -163,8 +162,106 @@ final class DetailsTest extends TestCase
     public function Httpクライアントの失敗は_HTTPの状態を出す(): void
     {
         $this->assertSame(['HTTP の状態: 503'], Details::lines(new RequestException(new Response(new Psr7Response(503)))));
-        $this->assertSame('HTTP 503', Details::of(new RequestException(new Response(new Psr7Response(503))))->summary);
+        $this->assertSame('相手が一時停止・HTTP 503', Details::of(new RequestException(new Response(new Psr7Response(503))))->summary);
         $this->assertSame('接続できない', Details::of(new ConnectionException('probe'))->summary);
+    }
+
+    #[Test]
+    public function DBの例外は_番号の表の言葉を件名の頭に置き_説明を添える(): void
+    {
+        $e = $this->queryFailure('22003', 1264, "Out of range value for column 'score' at row 1");
+
+        $this->assertSame('数値が範囲外・SQLSTATE 22003', Details::of($e)->summary);
+        $this->assertSame('列の型に収まらない数値を入れようとした。列の型か入れた値を見る', Details::of($e)->explanation);
+    }
+
+    #[Test]
+    public function MySQLでない接続では_番号の表を引かずSQLSTATEの表だけを見る(): void
+    {
+        $pdo = new PDOException('SQLSTATE[23000]: probe');
+        $pdo->errorInfo = ['23000', 1062, 'probe'];
+        $e = new QueryException('probe', 'insert into t values (?)', [], $pdo, ['driver' => 'sqlsrv']);
+
+        $this->assertSame('制約に反した・SQLSTATE 23000', Details::of($e)->summary);
+    }
+
+    #[Test]
+    public function 表に無いSQLSTATEには何も足さない(): void
+    {
+        $e = $this->queryFailure('HY000', 1105, 'probe');
+
+        $this->assertSame('SQLSTATE HY000', Details::of($e)->summary);
+        $this->assertNull(Details::of($e)->explanation);
+    }
+
+    #[Test]
+    public function 接続の失敗は言い分け_2006は接続が切れたと言う(): void
+    {
+        $this->assertSame('接続が切れた・SQLSTATE HY000', Details::of($this->connectFailure('SQLSTATE[HY000] [2006] MySQL server has gone away'))->summary);
+        $this->assertSame('DB との接続が切れていた', Details::of($this->connectFailure('SQLSTATE[HY000] [2006] MySQL server has gone away'))->explanation);
+        $this->assertSame('名前が引けない・SQLSTATE HY000', Details::of($this->connectFailure('SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for db.internal failed'))->summary);
+        $this->assertSame('接続できない・SQLSTATE HY000', Details::of($this->connectFailure('SQLSTATE[HY000] [2002] Connection refused'))->summary);
+    }
+
+    #[Test]
+    public function 実行時間の上限は秒数だけを出す(): void
+    {
+        $e = new FatalError('Maximum execution time of 30 seconds exceeded', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1]);
+
+        $this->assertSame('実行時間の上限（30 秒）', Details::of($e)->summary);
+        $this->assertSame([], Details::lines(new FatalError('Maximum execution time of 30 seconds exceeded in /home/deploy', 0, ['type' => E_ERROR, 'file' => __FILE__, 'line' => 1])));
+    }
+
+    #[Test]
+    public function nullのメソッド呼び出しはメソッドの名前だけを出す(): void
+    {
+        $this->assertSame('null の save() を呼んだ', Details::of(new \Error('Call to a member function save() on null'))->summary);
+        $this->assertNull(Details::of(new \Error('Call to a member function save() on string'))->summary);
+        $this->assertNull(Details::of(new \Error('Call to a member function taro@example.com() on null'))->summary);
+    }
+
+    #[Test]
+    public function クラスで決まる例外は文言を読まずに短い言葉を出す(): void
+    {
+        $this->assertSame('引数の数の誤り', Details::of(new \ArgumentCountError('Too few arguments to function probe(), 0 passed in /home/deploy/x.php'))->summary);
+        $this->assertSame('match に当たる場合が無い', Details::of(new \UnhandledMatchError('Unhandled match case \'taro@example.com\''))->summary);
+        $this->assertSame('ジョブの時間切れ', Details::of(new \Illuminate\Queue\TimeoutExceededException('App\Jobs\X has timed out.'))->summary);
+    }
+
+    #[Test]
+    public function HTTPの接続の失敗は時間切れを言い分ける(): void
+    {
+        $request = new \GuzzleHttp\Psr7\Request('GET', 'https://api.example.test/');
+
+        $this->assertSame('接続の時間切れ', Details::of(new ConnectionException('probe', 0, new \GuzzleHttp\Exception\ConnectTimeoutException('probe', $request)))->summary);
+    }
+
+    #[Test]
+    public function Googleの失敗は_最初のreasonの言葉を状態より先に取る(): void
+    {
+        $e = $this->google(403, [['reason' => 'rateLimitExceeded'], ['reason' => 'forbidden']]);
+
+        $this->assertSame('回数の上限・reason rateLimitExceeded, forbidden・HTTP 403', Details::of($e)->summary);
+        $this->assertSame('短い時間に送りすぎた。間を空けて送り直す', Details::of($e)->explanation);
+    }
+
+    #[Test]
+    public function 表に無いHTTPの状態には何も足さない(): void
+    {
+        $kind = Details::of(new RequestException(new Response(new Psr7Response(418))));
+
+        $this->assertSame('HTTP 418', $kind->summary);
+        $this->assertNull($kind->explanation);
+    }
+
+    #[Test]
+    public function スケジュールの終了コードがシグナルなら_シグナルの番号だけを出す(): void
+    {
+        $kind = Details::of($this->plain("Scheduled command ['php' 'artisan' report:daily] failed with exit code [137]."));
+
+        $this->assertSame('スケジュール report:daily・強制終了（SIGKILL）・終了コード 137', $kind->summary);
+        $this->assertSame('外から強制終了された（メモリ不足で OS が止めた場合を含む）', $kind->explanation);
+        $this->assertSame('スケジュール report:daily・シグナル 3・終了コード 131', Details::of($this->plain("Scheduled command ['php' 'artisan' report:daily] failed with exit code [131]."))->summary);
     }
 
     #[Test]

@@ -267,8 +267,8 @@ final class ReporterTest extends TestCase
 
         $body = $this->reporter()->body($e);
 
-        $this->assertStringStartsWith('[info][title]Probe（production）ClientException: HTTP 429[/title]', $body);
-        $this->assertSame('HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
+        $this->assertStringStartsWith('[info][title]Probe（production）ClientException: 回数の上限・HTTP 429[/title]', $body);
+        $this->assertSame('回数の上限・HTTP 429', \Ad5\RichPhpChatwork\Details::of($e)->summary);
     }
 
     #[Test]
@@ -897,7 +897,7 @@ final class ReporterTest extends TestCase
         $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
         $pdo->errorInfo = ['23000', 1062, 'x'];
 
-        $this->assertSame("[info][title]Probe（production）QueryException: SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
+        $this->assertSame("[info][title]Probe（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
         $this->assertSame("[info][title]Probe（production）知らせ: 多い[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), null, [], '多い'));
 
         // 要約が長くても、種類（短いクラス名）は件名に残り、要約の後ろから切る
@@ -1045,6 +1045,22 @@ final class ReporterTest extends TestCase
         $this->assertLessThanOrEqual(30000, mb_strlen($body));
         $this->assertMatchesRegularExpression('/\[code\]x+…\[\/code\]/', $body);
         $this->assertStringContainsString('前後のコード: 長いので省いた（ログを見る）', $body);
+    }
+
+    #[Test]
+    public function 説明の行はメッセージの枠のすぐ後ろに置く(): void
+    {
+        $body = $this->reporter()->body(new \Illuminate\Http\Client\RequestException(new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response(503))));
+
+        $this->assertStringContainsString("[code]HTTP 503[/code]説明: 相手が一時的に使えない（混雑か保守）\nアプリの行: ", $body);
+    }
+
+    #[Test]
+    public function 表に無い値では説明の行を出さない(): void
+    {
+        $body = $this->reporter()->body(new \Illuminate\Http\Client\RequestException(new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response(418))));
+
+        $this->assertStringContainsString('[code]HTTP 418[/code]アプリの行: ', $body);
     }
 
     #[Test]
