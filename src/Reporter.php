@@ -382,7 +382,8 @@ final class Reporter
         $appLine = $this->source->appLine($main, $view);
         $body = new Body();
 
-        $assembled = KnownMessage::of($main);
+        $shape = $main instanceof QueryException ? SqlShape::of($main) : null;
+        $assembled = KnownMessage::of($main, $shape !== null);
         $message = $this->message($main, $assembled, $redactor);
         if ($message !== null) {
             $body->code($message, 'message');
@@ -390,6 +391,10 @@ final class Reporter
 
         if ($kind->explanation !== null) {
             $body->text(Text::field("説明: {$kind->explanation}", false, null, self::LINE_WIDTH));
+        }
+        // メッセージの「SQL: 下の枠」はこの枠を指す。枠を落とすときは見出しごと置き換える
+        if ($shape !== null) {
+            $body->text('SQL の形（値は ?）:', 'shape')->code(Text::field($shape, true, null, SqlShape::WIDTH), 'shape');
         }
 
         $kindLine = $this->kindLine($kind, $assembled !== null && $assembled !== KnownMessage::FAILED ? $assembled : null);
@@ -430,12 +435,15 @@ final class Reporter
         $title = $this->title($names->short($main::class), $kind->summary);
         $text = $body->render($title);
 
-        // 文字列の途中では切らず、塊で落とす（呼び出しの並び → 前後のコード）
+        // 文字列の途中では切らず、塊で落とす（呼び出しの並び → 前後のコード → SQL の形）
         if (mb_strlen($text) > Body::MAX_LENGTH) {
             $text = $body->drop('trace', '呼び出しの並び: 長いので省いた（ログを見る）')->render($title);
         }
         if (mb_strlen($text) > Body::MAX_LENGTH) {
             $text = $body->drop('snippet', '前後のコード: 長いので省いた（ログを見る）')->render($title);
+        }
+        if (mb_strlen($text) > Body::MAX_LENGTH) {
+            $text = $body->drop('shape', 'SQL の形: 長いので省いた（ログを見る）')->render($title);
         }
         // それでも超えるなら（message_max_length を大きくした文言）、文言を詰める
         if (mb_strlen($text) > Body::MAX_LENGTH && $message !== null) {

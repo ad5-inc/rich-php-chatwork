@@ -109,6 +109,21 @@ final class KnownMessageTest extends PlainTestCase
     }
 
     #[Test]
+    public function SQLの形を別の枠に出すときは_どの形でもSQLは下の枠と書く(): void
+    {
+        $allowed = $this->query('22001', 1406, 'String data, right truncated', "Data too long for column 'name' at row 1");
+        $other = $this->query('42000', 1142, 'Syntax error or access violation', "SELECT command denied to user 'probe-user'@'10.0.0.1' for table 'secrets'");
+        $pdo = new PDOException('SQLSTATE[HY000] [2002] Connection refused', 2002);
+        $connection = new QueryException('mysql', 'select 1', [], $pdo, ['driver' => 'mysql']);
+        $notPdo = new QueryException('mysql', 'select 1', [], new RuntimeException('probe-secret'));
+
+        $this->assertSame("SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'name' at row 1 (Connection: mysql, SQL: 下の枠)", KnownMessage::of($allowed, true));
+        $this->assertSame('SQLSTATE[42000] ドライバー 1142（文言はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($other, true));
+        $this->assertSame('SQLSTATE[HY000] [2002] 接続できない（詳細はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($connection, true));
+        $this->assertSame('（文言はログ） (Connection: mysql, SQL: 下の枠)', KnownMessage::of($notPdo, true));
+    }
+
+    #[Test]
     public function previousがPDOExceptionでなければ_文言を使わない(): void
     {
         $e = new QueryException('mysql', 'select 1', [], new RuntimeException('SQLSTATE[HY000] lost connection to probe-user@10.0.0.1'));

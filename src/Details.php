@@ -56,7 +56,7 @@ final class Details
     /** PHP が作る null のメソッド呼び出し。メソッドの名前だけを取る */
     private const CALL_ON_NULL = '/\ACall to a member function ([A-Za-z0-9_]{1,64})\(\) on null\z/';
 
-    /** 番号の表（Glossary）を使うドライバー */
+    /** 番号の表（Glossary）と SQL の形（SqlShape）を使うドライバー */
     private const MYSQL_DRIVERS = ['mysql', 'mariadb'];
 
     /** Laravel のスケジュール（schedule:run）が作るコマンドの失敗 */
@@ -170,6 +170,14 @@ final class Details
     public static function driver(QueryException $e): ?string
     {
         return self::connectionSetting($e, 'driver');
+    }
+
+    /**
+     * 接続の設定のデータベース名（SQL の形で {db} に替える）。取り方は driver() と同じ
+     */
+    public static function database(QueryException $e): ?string
+    {
+        return self::connectionSetting($e, 'database');
     }
 
     /**
