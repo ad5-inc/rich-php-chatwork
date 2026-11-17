@@ -20,7 +20,7 @@ Request ID: {値}（中身はログをこの番号で引く）
 発端の Request ID: {値}                       ← ジョブで、出した側の ID があるときだけ（sync の場合は「入口」の節）
 同じ例外: …                                   ← 間引いた回数か、上限で送らなかった回数が 0 でないとき
 ほかの例外: …                                 ← 全体の上限で送らなかった分（ほかのキーの物）があるとき
-[hr][code]{呼び出しの並び}[/code][/info]
+[hr][code]{呼び出しの並び}[/code]rich-php-chatwork {版}[/info]   ← いつも最後の行
 ```
 
 - 枠（`[code]`・`[hr]`）の前後に改行を足さない。地の文の行は、後ろに何か続くときだけ改行で終える（`[/title][code]`・`[/code]アプリの行:`・`アプリの行: …\n[code]`）
@@ -30,8 +30,9 @@ Request ID: {値}（中身はログをこの番号で引く）
 - 呼び出しの並びが空なら、横線と枠を出さず「呼び出しの並び: 取れない」
 - 「説明」の行は決まった文だけ（下の「番号に添える言葉」）。表に当たらなければ出さない
 - SQL の形を出すときは、メッセージの末尾を `SQL: 下の枠` にする。出さないとき（MySQL・MariaDB 以外の接続、組み立ての失敗）は今までどおり `SQL: （ログ）` か `(Connection: …)` だけ
-- 本文は 30,000 文字まで。超えたら呼び出しの並びを「呼び出しの並び: 長いので省いた（ログを見る）」に、まだ超えれば前後のコードを「前後のコード: 長いので省いた（ログを見る）」に、まだ超えれば SQL の形を「SQL の形: 長いので省いた（ログを見る）」に置き換え、それでも超えればメッセージを詰める（末尾に `…`）。送る直前にまだ超えていたら、本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える（件名は普通のまま。下の「最小の知らせ」）
+- 本文は 30,000 文字まで（版の行は落とさない）。超えたら呼び出しの並びを「呼び出しの並び: 長いので省いた（ログを見る）」に、まだ超えれば前後のコードを「前後のコード: 長いので省いた（ログを見る）」に、まだ超えれば SQL の形を「SQL の形: 長いので省いた（ログを見る）」に置き換え、それでも超えればメッセージを詰める（末尾に `…`）。送る直前にまだ超えていたら、本文の 1 行目を「長すぎて省いた（ログを見る）」にした短い知らせに替える（件名は普通のまま。下の「最小の知らせ」）
 - Request ID が無ければ「Request ID: （無し）」
+- 最後の行は、知らせを作った部品の版（下の「部品の版」）
 
 ### 項目の長さ（表示幅。全角は 2）
 
@@ -44,6 +45,15 @@ Request ID: {値}（中身はログをこの番号で引く）
 | 種類・包んだもの・原因・アプリの行・notice の行と枠の 1 行 | 500 |
 | 前後のコードの 1 行 | 160 |
 | SQL の形 | 600（超えたら末尾を `…（長いので省いた。全文はログ）`） |
+
+## 部品の版
+
+本文の最後の行に、知らせを作った部品の版を `rich-php-chatwork 0.6.1` の形で出す。版によって本文の形が違う（0.6 で件名の要約の並びと SQL の形が変わった）ので、読み手が [CHANGELOG](../CHANGELOG.md) のどの版と照らせばよいかを示す。0.6.0 までの知らせにはこの行が無い。
+
+- 例外の知らせ・notice・最小の知らせ・長さで替えた知らせのどれにも出す。件名には入れない（目立たせない）
+- 版は実行時に Composer の記録（`InstalledVersions::getPrettyVersion()`）から取る。コードに版の数字は書かない
+- 出すのはリリースの版の形（`0.6.1`・`1.0.0-beta.2`。数字・英字・`.`・`-` だけ）。dev のブランチ（`dev-main`）・Composer の記録が無い・取れないときは「rich-php-chatwork（版は不明）」にし、知らせは止めない
+- 形に当てた後も、ほかの項目と同じく記法の逃がしを通す
 
 ## 件名
 
@@ -141,7 +151,8 @@ Request ID: 3f2a…（ジョブの中のログ）
 ```text
 [info][title]{アプリ名}（{環境}）知らせ: {タイトル}[/title]{行}
 {行}
-[code]{code}[/code]{同じ知らせ・ほかの例外}[/info]
+[code]{code}[/code]{同じ知らせ・ほかの例外}
+rich-php-chatwork {版}[/info]
 ```
 
 - 行と枠は伏せて逃がす。行と枠の 1 行は 500 まで
@@ -154,17 +165,20 @@ Request ID: 3f2a…（ジョブの中のログ）
 
 ```text
 [info][title]example-app（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）
-同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 1 回[/info]
-[info][title]example-app（production）知らせ: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]
+同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 1 回
+rich-php-chatwork 0.6.1[/info]
+[info][title]example-app（production）知らせ: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）
+rich-php-chatwork 0.6.1[/info]
 ```
 
-件名の頭と Request ID が取れなければ省く。Request ID は普通の知らせと同じ番号（sync の失敗なら 2 行）。間引いた回数と上限で送らなかった件数の行（数字とクラス名だけ）は付ける。
+件名の頭と Request ID が取れなければ省く。Request ID は普通の知らせと同じ番号（sync の失敗なら 2 行）。間引いた回数と上限で送らなかった件数の行（数字とクラス名だけ）と、部品の版の行は付ける。
 
 本文が長すぎて替えたときは、件名は普通の件名と同じ（要約の後ろから切る）にし、本文の 1 行目で言い分ける。
 
 ```text
 [info][title]example-app（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）
-Request ID: req-1（中身はログをこの番号で引く）[/info]
+Request ID: req-1（中身はログをこの番号で引く）
+rich-php-chatwork 0.6.1[/info]
 ```
 
 ## 例
@@ -185,7 +199,7 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 [hr][code]（vendor の 3 段）
 #3 app/UseCase/Actions/Employee/UpdateAction.php:42 Illuminate\Database\Eloquent\Model->update()
 #4 app/Http/Controllers/EmployeeController.php:31 App\UseCase\Actions\Employee\UpdateAction->__invoke()
-（vendor の 38 段）[/code][/info]
+（vendor の 38 段）[/code]rich-php-chatwork 0.6.1[/info]
 ```
 
 ### ビューの中の DB の例外
@@ -197,7 +211,7 @@ SQL の形（値は ?）:
 アプリの行: app/Models/Employee.php:120（vendor の Connection.php:825 で投げた）
 [code]…[/code]リクエスト: GET /employees/{employee} ／ 利用者: 7
 Request ID: …（中身はログをこの番号で引く）
-[hr][code]…[/code][/info]
+[hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
 ```
 
 ### ジョブの中の TypeError
@@ -208,7 +222,7 @@ Request ID: …（中身はログをこの番号で引く）
 [code]…[/code]ジョブ: SyncEmployeeJob（試行 2 回目）
 Request ID: …（中身はログをこの番号で引く）
 発端の Request ID: …
-[hr][code]…[/code][/info]
+[hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
 ```
 
 ### 外の API の失敗（Webhook）
@@ -218,7 +232,7 @@ Request ID: …（中身はログをこの番号で引く）
 アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:1100 で投げた）
 [code]…[/code]コマンド: report:daily
 Request ID: …（中身はログをこの番号で引く）
-[hr][code]…[/code][/info]
+[hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
 ```
 
 ### メモリ切れ（呼び出しの並びが取れない）
@@ -227,7 +241,8 @@ Request ID: …（中身はログをこの番号で引く）
 [info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title][code]Allowed memory size of 536870912 bytes exhausted (tried to allocate 20480 bytes)[/code]アプリの行: 無し（vendor の Collection.php:512 で投げた）
 コマンド: report:daily
 Request ID: …（中身はログをこの番号で引く）
-呼び出しの並び: 取れない[/info]
+呼び出しの並び: 取れない
+rich-php-chatwork 0.6.1[/info]
 ```
 
 ### DB の例外の SQL の形
@@ -267,5 +282,6 @@ SQL の形（値は ?）:
 
 ```text
 [info][title]example-app（production）知らせ: ログインの失敗が多い[/title]直近 10 分の失敗: 52 回
-IP やログイン ID は laravel.log を見る[/info]
+IP やログイン ID は laravel.log を見る
+rich-php-chatwork 0.6.1[/info]
 ```
