@@ -8,6 +8,7 @@ use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\RichChatworkServiceProvider;
 use Ad5\RichPhpChatwork\Source;
 use Ad5\RichPhpChatwork\Transport;
+use Ad5\RichPhpChatwork\Version;
 use Illuminate\Foundation\Application as LaravelApplication;
 use Orchestra\Testbench\TestCase as Orchestra;
 use ReflectionProperty;
@@ -22,6 +23,8 @@ abstract class TestCase extends Orchestra
         parent::setUp();
 
         $this->transport = new FakeTransport();
+        // 版は Composer の記録（このリポジトリでは 1.0.0+no-version-set）に寄らず、決まった値にする
+        $this->app?->instance(Version::class, new Version('0.6.1'));
         // testbench の base_path() は vendor の中の骨組み。このリポジトリをアプリとみなす（tests がアプリ、vendor が vendor）
         $this->useSource(self::source());
         $this->app?->instance(Transport::class, $this->transport);

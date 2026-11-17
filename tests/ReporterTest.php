@@ -12,6 +12,7 @@ use Ad5\RichPhpChatwork\Snippet;
 use Ad5\RichPhpChatwork\Trace;
 use Ad5\RichPhpChatwork\Transport;
 use Ad5\RichPhpChatwork\Throttle;
+use Ad5\RichPhpChatwork\Version;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Cache\ArrayStore;
@@ -276,7 +277,7 @@ final class ReporterTest extends TestCase
     {
         $this->reporter()->notice('バックアップ', ['失敗した: The process "mysqldump -pS3cret db" exceeded the timeout of 60 seconds.'], 'backup');
 
-        $this->assertStringContainsString('[/title]失敗した: The process "（伏せた）" exceeded the timeout of 60 seconds.[/info]', $this->transport->sent[0]['body']);
+        $this->assertStringContainsString("[/title]失敗した: The process \"（伏せた）\" exceeded the timeout of 60 seconds.\nrich-php-chatwork 0.6.1[/info]", $this->transport->sent[0]['body']);
         $this->assertStringNotContainsString('S3cret', $this->transport->sent[0]['body']);
     }
 
@@ -294,7 +295,7 @@ final class ReporterTest extends TestCase
     {
         $this->reporter()->notice('取り込み', ['3 件が失敗', 'payload {"pin":"probe-pw-17"}'], 'dump', "{\"rows\": 3}");
 
-        $this->assertSame("[info][title]Probe（production）知らせ: 取り込み[/title]3 件が失敗\npayload {\"pin\":（伏せた）}\n[code]{\"rows\": 3}[/code][/info]", $this->transport->sent[0]['body']);
+        $this->assertSame("[info][title]Probe（production）知らせ: 取り込み[/title]3 件が失敗\npayload {\"pin\":（伏せた）}\n[code]{\"rows\": 3}[/code]rich-php-chatwork 0.6.1[/info]", $this->transport->sent[0]['body']);
     }
 
     #[Test]
@@ -556,13 +557,13 @@ final class ReporterTest extends TestCase
         $this->reporter()->notice('ログインの失敗が多い', ['別の ID'], 'signin:other');
 
         $this->assertCount(2, $this->transport->sent);
-        $this->assertSame("[info][title]Probe（production）知らせ: ログインの失敗が多い[/title]同じ ID で 20 回\n宛先 （伏せた） ［toall］\n[code]token=（伏せた）\n［/code]［toall][/code][/info]", $this->transport->sent[0]['body']);
+        $this->assertSame("[info][title]Probe（production）知らせ: ログインの失敗が多い[/title]同じ ID で 20 回\n宛先 （伏せた） ［toall］\n[code]token=（伏せた）\n［/code]［toall][/code]rich-php-chatwork 0.6.1[/info]", $this->transport->sent[0]['body']);
 
         $this->travel(3601)->seconds();
         $this->reporter()->notice('ログインの失敗が多い', ['同じ ID で 22 回'], 'signin:probe');
 
         $this->assertCount(3, $this->transport->sent);
-        $this->assertStringEndsWith("同じ ID で 22 回\n同じ知らせ: 前の知らせ（10:00）の後の 1 時間に、送らずに 1 回[/info]", $this->transport->sent[2]['body']);
+        $this->assertStringEndsWith("同じ ID で 22 回\n同じ知らせ: 前の知らせ（10:00）の後の 1 時間に、送らずに 1 回\nrich-php-chatwork 0.6.1[/info]", $this->transport->sent[2]['body']);
     }
 
     #[Test]
@@ -574,7 +575,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->transport->sent[0]['body'];
         $this->assertLessThanOrEqual(30000, mb_strlen($body));
-        $this->assertMatchesRegularExpression('/\n（以下 \d+ 行は省いた）\[\/info\]\z/u', $body);
+        $this->assertMatchesRegularExpression('/\n（以下 \d+ 行は省いた）\nrich-php-chatwork 0\.6\.1\[\/info\]\z/u', $body);
     }
 
     #[Test]
@@ -673,7 +674,7 @@ final class ReporterTest extends TestCase
 
         $reporter->report($this->failWith(self::SECRET));
 
-        $this->assertSame(['[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]'], array_column($this->transport->sent, 'body'));
+        $this->assertSame(["[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）\nrich-php-chatwork 0.6.1[/info]"], array_column($this->transport->sent, 'body'));
         $index = array_search('例外の知らせを組み立てられなかった', $logged->messages, true);
         $this->assertIsInt($index);
         $this->assertInstanceOf(LogicException::class, $logged->contexts[$index]['exception'] ?? null, '部品の例外を、文言と呼び出しの並びが出る形で渡す');
@@ -703,7 +704,7 @@ final class ReporterTest extends TestCase
 
         $reporter->notice('ログインの失敗が多い', ['宛先 ' . self::SECRET], 'signin:probe');
 
-        $this->assertSame(['[info][title]Probe（production）知らせ: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）[/info]'], array_column($this->transport->sent, 'body'));
+        $this->assertSame(["[info][title]Probe（production）知らせ: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）\nrich-php-chatwork 0.6.1[/info]"], array_column($this->transport->sent, 'body'));
         $this->assertContains('知らせを組み立てられなかった', $logged->messages);
     }
 
@@ -897,8 +898,8 @@ final class ReporterTest extends TestCase
         $pdo = new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 x');
         $pdo->errorInfo = ['23000', 1062, 'x'];
 
-        $this->assertSame("[info][title]Probe（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
-        $this->assertSame("[info][title]Probe（production）知らせ: 多い[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）[/info]", $oversized->invoke($this->reporter(), null, [], '多い'));
+        $this->assertSame("[info][title]Probe（production）QueryException: 重複・SQLSTATE 23000[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）\nrich-php-chatwork 0.6.1[/info]", $oversized->invoke($this->reporter(), new \Illuminate\Database\QueryException('mysql', 'select 1', [], $pdo), []));
+        $this->assertSame("[info][title]Probe（production）知らせ: 多い[/title]長すぎて省いた（ログを見る）\nRequest ID: req-1（中身はログをこの番号で引く）\nrich-php-chatwork 0.6.1[/info]", $oversized->invoke($this->reporter(), null, [], '多い'));
 
         // 要約が長くても、種類（短いクラス名）は件名に残り、要約の後ろから切る
         $long = new \TypeError('App\\Services\\' . str_repeat('Long', 10) . '\\VeryLongServiceNameForProbe::runSomethingVeryLong(): Argument #1 ($employeeId) must be of type int, null given');
@@ -1019,7 +1020,7 @@ final class ReporterTest extends TestCase
         $this->travelTo(new \DateTimeImmutable('2026-11-11 10:01:01'));
         $reporter->report($e);
 
-        $this->assertSame('[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）' . "\n" . '同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 1 回[/info]', $this->transport->sent[1]['body']);
+        $this->assertSame('[info][title]Probe（production）RuntimeException: 知らせを組み立てられなかった[/title]Request ID: req-1（中身はログをこの番号で引く）' . "\n" . '同じ例外: 前の知らせ（10:00）の後の 60 秒に、送らずに 1 回' . "\n" . 'rich-php-chatwork 0.6.1[/info]', $this->transport->sent[1]['body']);
     }
 
     #[Test]
@@ -1031,7 +1032,7 @@ final class ReporterTest extends TestCase
 
         $body = $this->transport->sent[0]['body'];
         $this->assertLessThanOrEqual(30000, mb_strlen($body));
-        $this->assertMatchesRegularExpression('/\n（以下 \d+ 行は省いた）\[\/code\]\[\/info\]\z/u', $body);
+        $this->assertMatchesRegularExpression('/\n（以下 \d+ 行は省いた）\[\/code\]rich-php-chatwork 0\.6\.1\[\/info\]\z/u', $body);
         $this->assertStringContainsString('[/title]1 行', $body);
     }
 
@@ -1194,7 +1195,7 @@ final class ReporterTest extends TestCase
     {
         $app = $this->app ?? $this->fail('アプリが無い');
 
-        return new Reporter($app, config(), $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
+        return new Reporter($app, config(), $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class), $app->make(Version::class));
     }
 
     /**
@@ -1226,7 +1227,7 @@ final class ReporterTest extends TestCase
         };
         $app = $this->app ?? $this->fail('アプリが無い');
 
-        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
+        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class), $app->make(Version::class));
     }
 
     /*

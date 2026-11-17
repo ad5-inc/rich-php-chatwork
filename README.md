@@ -121,13 +121,14 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 [hr][code]（vendor の 3 段）
 #3 app/UseCase/Actions/Employee/UpdateAction.php:42 Illuminate\Database\Eloquent\Model->update()
 #4 app/Http/Controllers/EmployeeController.php:31 App\UseCase\Actions\Employee\UpdateAction->__invoke()
-（vendor の 38 段）[/code][/info]
+（vendor の 38 段）[/code]rich-php-chatwork 0.6.1[/info]
 ```
 
 - 件名は「アプリ（環境）短いクラス名: 要約」。要約は「短い言葉・決まった項目・番号」の順で、値を含まず、文言は入れない（スマホのロック画面に出るため）
 - 番号（SQLSTATE・MySQL の番号・HTTP の状態・Google の reason・終了コード）とよくある例外には、決まった日本語を表から引いて足す。件名には短い言葉、本文には「説明: 」の行。表に無い値には何も足さない
 - DB の例外（MySQL・MariaDB の接続）は、値をすべて `?` にした SQL の形を枠で出す
 - 入口はジョブ → コマンド → HTTP の順に見て、最初に当たった 1 つを出す
+- 最後の行は、知らせを作った部品の版（`rich-php-chatwork 0.6.1`）。版によって本文の形が違うので、CHANGELOG のどの版と照らせばよいかが分かる。例外ではない知らせにも出す。Composer の記録から取れない（dev のブランチなど）ときは「rich-php-chatwork（版は不明）」
 
 並び・件名の要約・アプリの行・入口・間引きの言い方・ほかの例は [docs/message-format.md](docs/message-format.md)。
 
@@ -146,6 +147,7 @@ Request ID: 6f1c…（中身はログをこの番号で引く）
 - アプリの行と前後 2 行（`app/`・`routes/` の中のファイルだけ。形のはっきりした秘密と、文字列の値のパスワードなどは伏せる）
 - 入口（ジョブの短いクラス名と試行回数／コマンドの名前／HTTP のメソッドとルートのテンプレートと利用者の内部 ID）、Request ID
 - 呼び出しの並び（段ごとのクラス::メソッドとファイル:行。アプリの段を 10 段まで、vendor の段はまとめる）
+- 部品の版（Composer の記録の版。リリースの版の形のときだけ）
 
 送らないもの:
 
@@ -195,7 +197,7 @@ SQL の形には、表名・列名などの名前が残る。次の物は値で�
 
 ## 上げるとき
 
-版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.4 から 0.5 へは、アプリの `config/rich-chatwork.php` を消す（送り先の `.env` はそのまま）。0.5 から 0.6 へは、件名の要約の並びが変わり、送り先の部屋に SQL の形（表名・列名）が出る。
+版ごとの変更と「上げるときの注意」は [CHANGELOG](CHANGELOG.md) にある。0.4 から 0.5 へは、アプリの `config/rich-chatwork.php` を消す（送り先の `.env` はそのまま）。0.5 から 0.6 へは、件名の要約の並びが変わり、送り先の部屋に SQL の形（表名・列名）が出る。0.6.1 からは、本文の最後の行に部品の版が出る（使う側の直しは要らない）。
 
 ## 気をつけること
 

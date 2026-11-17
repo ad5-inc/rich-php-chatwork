@@ -8,6 +8,7 @@ use Ad5\RichPhpChatwork\JobEntrance;
 use Ad5\RichPhpChatwork\Reporter;
 use Ad5\RichPhpChatwork\Tests\Jobs\FailingJob;
 use Ad5\RichPhpChatwork\Tests\Jobs\OuterJob;
+use Ad5\RichPhpChatwork\Version;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -292,7 +293,7 @@ final class JobEntranceTest extends TestCase
         }
 
         $body = $this->onlyBody();
-        $this->assertStringContainsString('知らせを組み立てられなかった[/title]Request ID: ' . FailingJob::$seenRequestId . "（ジョブの中のログ）\n発端の Request ID: req-caller（例外の記録はこの番号）[/info]", $body);
+        $this->assertStringContainsString('知らせを組み立てられなかった[/title]Request ID: ' . FailingJob::$seenRequestId . "（ジョブの中のログ）\n発端の Request ID: req-caller（例外の記録はこの番号）\nrich-php-chatwork 0.6.1[/info]", $body);
     }
 
     #[Test]
@@ -358,7 +359,7 @@ final class JobEntranceTest extends TestCase
         };
         $app = $this->app ?? $this->fail('アプリが無い');
 
-        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class));
+        return new Reporter($app, $config, $app->make('cache'), $this->transport, self::source(), $app->make(JobEntrance::class), $app->make(Version::class));
     }
 
     private function runOnWorker(WorkerJob $job): void

@@ -41,6 +41,8 @@ final class Reporter
 
     private readonly JobEntrance $entrance;
 
+    private readonly Version $version;
+
     /** 送り先が空の警告を書いたか（プロセスごとに 1 度。Reporter はコンテナの singleton） */
     private bool $warnedEmpty = false;
 
@@ -51,9 +53,11 @@ final class Reporter
         private readonly Transport $transport,
         private readonly Source $source,
         ?JobEntrance $entrance = null,
+        ?Version $version = null,
     ) {
         $this->throttle = new Throttle($config, $cache, Throttle::fallbackDirectory($source->base()));
         $this->entrance = $entrance ?? new JobEntrance($config);
+        $this->version = $version ?? Version::installed();
     }
 
     /**
@@ -313,7 +317,7 @@ final class Reporter
     }
 
     /**
-     * 最小の知らせの中身。Request ID（普通の知らせと同じ番号）と、間引いた回数・上限で送らなかった件数の行。取れない物は省く
+     * 最小の知らせの中身。Request ID（普通の知らせと同じ番号）と、間引いた回数・上限で送らなかった件数の行と、部品の版の行。取れない物は省く
      *
      * @param array<mixed> $extra
      */
@@ -326,7 +330,7 @@ final class Reporter
             $ids = [];
         }
 
-        return implode("\n", [...$ids, ...array_values(array_filter($extra, is_string(...)))]);
+        return implode("\n", [...$ids, ...array_values(array_filter($extra, is_string(...))), $this->version->line()]);
     }
 
     /**
@@ -431,6 +435,8 @@ final class Reporter
         } else {
             $body->hr('trace')->code(Text::escape($trace, true), 'trace');
         }
+        // 版は目立たせないよう一番下に置く。長さで塊を落としても残す
+        $body->text($this->version->line());
 
         $title = $this->title($names->short($main::class), $kind->summary);
         $text = $body->render($title);
@@ -632,7 +638,7 @@ final class Reporter
                 ...($keepCode < count($codeLines) ? ['（以下 ' . (count($codeLines) - $keepCode) . ' 行は省いた）'] : []),
             ]);
             $omitted = $keepRows < count($rows) ? '（以下 ' . (count($rows) - $keepRows) . ' 行は省いた）' : null;
-            $text = self::noticeBody(array_slice($rows, 0, $keepRows), $omitted, $block, $extra)->render($heading);
+            $text = self::noticeBody(array_slice($rows, 0, $keepRows), $omitted, $block, [...$extra, $this->version->line()])->render($heading);
 
             $over = mb_strlen($text) - Body::MAX_LENGTH;
             if ($over <= 0) {
@@ -665,7 +671,7 @@ final class Reporter
 
     /**
      * @param list<string> $rows
-     * @param list<string> $extra
+     * @param list<string> $extra 末尾に足す行（間引いた回数・上限で送らなかった件数・部品の版）
      */
     private static function noticeBody(array $rows, ?string $omitted, ?string $block, array $extra): Body
     {
