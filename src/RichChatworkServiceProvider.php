@@ -50,6 +50,7 @@ final class RichChatworkServiceProvider extends ServiceProvider
             return new PhpChatworkTransport(is_int($seconds) || is_float($seconds) ? (float) $seconds : 180.0);
         }, true);
         $this->app->bindIf(Source::class, static fn (Application $app): Source => new Source($app->basePath()), true);
+        $this->app->bindIf(Version::class, static fn (): Version => Version::installed(), true);
         $this->app->singleton(JobEntrance::class, static fn (Application $app): JobEntrance => new JobEntrance($app->make('config')));
         $this->app->singleton(Reporter::class, static fn (Application $app): Reporter => new Reporter(
             $app,
@@ -58,6 +59,7 @@ final class RichChatworkServiceProvider extends ServiceProvider
             $app->make(Transport::class),
             $app->make(Source::class),
             $app->make(JobEntrance::class),
+            $app->make(Version::class),
         ));
     }
 

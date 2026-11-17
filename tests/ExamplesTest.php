@@ -99,7 +99,7 @@ final class ExamplesTest extends TestCase
             [hr][code]（vendor の 3 段）
             #3 app/UseCase/Actions/Employee/UpdateAction.php:42 Illuminate\Database\Eloquent\Model->update()
             #4 app/Http/Controllers/EmployeeController.php:31 App\UseCase\Actions\Employee\UpdateAction->__invoke()
-            （vendor の 38 段）[/code][/info]
+            （vendor の 38 段）[/code]rich-php-chatwork 0.6.1[/info]
             TEXT, $this->transport->sent[1]['body']);
         $this->assertStringNotContainsString('同じ例外', $this->transport->sent[0]['body'], '1 回目は間引いた回数が無い');
     }
@@ -131,7 +131,7 @@ final class ExamplesTest extends TestCase
             アプリの行: app/Models/Employee.php:120（vendor の Connection.php:NNN で投げた）
             [code]…[/code]リクエスト: GET /employees/{employee} ／ 利用者: 7
             Request ID: …（中身はログをこの番号で引く）
-            [hr][code]…[/code][/info]
+            [hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
             TEXT, $this->onlyBody());
     }
 
@@ -158,7 +158,7 @@ final class ExamplesTest extends TestCase
             [code]…[/code]ジョブ: SyncEmployeeJob（試行 2 回目）
             Request ID: …（中身はログをこの番号で引く）
             発端の Request ID: req-origin
-            [hr][code]…[/code][/info]
+            [hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
             TEXT, $body);
         $this->assertStringNotContainsString('Request ID: req-origin（', $body, 'ジョブの Request ID は新しく付けた物');
         $this->assertNotSame('req-origin', Context::get('request_id'), 'report() が済むまでは戻さない（ログの Request ID と揃える）');
@@ -185,7 +185,7 @@ final class ExamplesTest extends TestCase
             アプリの行: app/Services/Notify/SlackNotifier.php:40（vendor の PendingRequest.php:NNN で投げた）
             [code]…[/code]コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
-            [hr][code]…[/code][/info]
+            [hr][code]…[/code]rich-php-chatwork 0.6.1[/info]
             TEXT, $this->onlyBody());
     }
 
@@ -205,7 +205,8 @@ final class ExamplesTest extends TestCase
             [info][title]example-app（production）FatalError: メモリ切れ（上限 512 MB）[/title][code]Allowed memory size of 536870912 bytes exhausted (tried to allocate NNN bytes)[/code]アプリの行: 無し（vendor の Collection.php:NNN で投げた）
             コマンド: report:daily
             Request ID: …（中身はログをこの番号で引く）
-            呼び出しの並び: 取れない[/info]
+            呼び出しの並び: 取れない
+            rich-php-chatwork 0.6.1[/info]
             TEXT, $this->onlyBody());
     }
 
@@ -277,7 +278,7 @@ final class ExamplesTest extends TestCase
     {
         $this->reporter()->notice('ログインの失敗が多い', ['直近 10 分の失敗: 52 回', 'IP やログイン ID は laravel.log を見る'], 'signin:all');
 
-        $this->assertSame("[info][title]example-app（production）知らせ: ログインの失敗が多い[/title]直近 10 分の失敗: 52 回\nIP やログイン ID は laravel.log を見る[/info]", $this->onlyBody());
+        $this->assertSame("[info][title]example-app（production）知らせ: ログインの失敗が多い[/title]直近 10 分の失敗: 52 回\nIP やログイン ID は laravel.log を見る\nrich-php-chatwork 0.6.1[/info]", $this->onlyBody());
     }
 
     private function reporter(): Reporter
