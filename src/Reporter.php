@@ -127,9 +127,10 @@ final class Reporter
     }
 
     /**
-     * 例外ではない知らせ（不自然に多いログインの失敗など）を、例外と同じ部屋に送る。同じ $throttleKey は notice_throttle_seconds に 1 回だけ
+     * 例外ではない知らせ（不自然に多いログインの失敗など）を送る。送る部屋は notice_room_id、空なら例外と同じ room_id。
+     * 同じ $throttleKey は notice_throttle_seconds に 1 回だけ
      *
-     * 送る条件（送り先・環境）は report() と同じ。送れなくても投げない。行と $code は伏せて逃がすが、
+     * 送る条件（トークン・部屋・環境）は report() と同じ。送れなくても投げない。行と $code は伏せて逃がすが、
      * 形の無い個人情報（氏名など）は伏せられないので入れない
      *
      * @param list<string> $lines 本文の行
@@ -139,7 +140,10 @@ final class Reporter
     {
         try {
             $token = Settings::string($this->config, 'access_token');
-            $room = Settings::string($this->config, 'room_id');
+            $room = Settings::string($this->config, 'notice_room_id');
+            if ($room === '') {
+                $room = Settings::string($this->config, 'room_id');
+            }
             $send = $token !== '' && $room !== '' && $this->environmentAllows();
         } catch (Throwable $failure) {
             $this->logFailure('知らせを Chatwork に送れなかった', $failure, null);
