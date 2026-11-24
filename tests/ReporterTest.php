@@ -495,7 +495,7 @@ final class ReporterTest extends TestCase
         $transport = $this->app?->make(\Ad5\RichPhpChatwork\Transport::class);
         $this->assertInstanceOf(PhpChatworkTransport::class, $transport);
         $this->assertSame(180.0, new \ReflectionProperty($transport, 'timeout')->getValue($transport));
-        $this->assertSame(require dirname(__DIR__) . '/config/rich-chatwork.php', ['access_token' => null, 'room_id' => null, 'app_name' => null]);
+        $this->assertSame(require dirname(__DIR__) . '/config/rich-chatwork.php', ['access_token' => null, 'room_id' => null, 'notice_room_id' => null, 'app_name' => null]);
     }
 
     #[Test]
@@ -564,6 +564,38 @@ final class ReporterTest extends TestCase
 
         $this->assertCount(3, $this->transport->sent);
         $this->assertStringEndsWith("同じ ID で 22 回\n同じ知らせ: 前の知らせ（10:00）の後の 1 時間に、送らずに 1 回\nrich-php-chatwork 0.6.1[/info]", $this->transport->sent[2]['body']);
+    }
+
+    #[Test]
+    public function 知らせの部屋を入れると_知らせだけがその部屋に行き_例外は元の部屋のまま(): void
+    {
+        config(['rich-chatwork.room_id' => '12345', 'rich-chatwork.notice_room_id' => '67890']);
+
+        $this->reporter()->notice('管理者を足した', ['1 人'], 'admin:1');
+        $this->reporter()->report($this->failWith('probe'));
+
+        $this->assertSame(['67890', '12345'], array_column($this->transport->sent, 'room'));
+    }
+
+    #[Test]
+    public function 知らせの部屋が空なら_知らせは例外と同じ部屋に行く(): void
+    {
+        config(['rich-chatwork.room_id' => '12345', 'rich-chatwork.notice_room_id' => '']);
+
+        $this->reporter()->notice('管理者を足した', ['1 人'], 'admin:1');
+
+        $this->assertSame(['12345'], array_column($this->transport->sent, 'room'));
+    }
+
+    #[Test]
+    public function 例外の部屋が空でも_知らせの部屋があれば知らせは送る(): void
+    {
+        config(['rich-chatwork.room_id' => null, 'rich-chatwork.notice_room_id' => '67890']);
+
+        $this->reporter()->notice('管理者を足した', ['1 人'], 'admin:1');
+        $this->reporter()->report($this->failWith('probe'));
+
+        $this->assertSame(['67890'], array_column($this->transport->sent, 'room'));
     }
 
     #[Test]

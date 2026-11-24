@@ -54,7 +54,13 @@ REPORT_CHATWORK_ROOM_ID=
 
 ## 設定
 
-**設定は送り先の 2 つ（`.env` の上の 2 行）だけ。** `config/rich-chatwork.php` はアプリに置かなくてよい。
+**設定は送り先の 2 つ（`.env` の上の 2 行）だけ。** 知らせの部屋と件名の名前は、必要なときだけ足す。 `config/rich-chatwork.php` はアプリに置かなくてよい。
+
+例外ではない知らせ（下の節）を例外とは別の部屋で受けたいときだけ、`.env` に 1 行足す。空なら `REPORT_CHATWORK_ROOM_ID` に送る。
+
+```dotenv
+REPORT_CHATWORK_NOTICE_ROOM_ID=
+```
 
 件名の名前を `APP_NAME` と変えたいときだけ、`.env` に 1 行足す（`APP_NAME` はログインのクッキーの名前やキャッシュの接頭辞にも使われ、変えると全員がログアウトするため）。
 
@@ -96,7 +102,7 @@ ServiceProvider は例外のハンドラーの `reportable()` に登録する。
 
 ## 例外ではない知らせ
 
-不自然に多いログインの失敗など、例外ではないことも同じ部屋に送れる。送る条件は例外の知らせと同じで、同じキーは `notice_throttle_seconds` に 1 回だけ送る。行と枠（`code`）は文言と同じ規則で伏せて逃がすが、氏名のような形の無い個人情報は伏せられないので入れない。IP やログイン ID も入れず、「laravel.log を見る」と案内する。地の文の行が値の書き出しの形（`=>`・JSON・serialize など）を含むなら、その行は「（値の書き出しを含むので省いた。ログを見る）」になる。
+不自然に多いログインの失敗など、例外ではないことも送れる。送る部屋は `REPORT_CHATWORK_NOTICE_ROOM_ID`、空なら例外と同じ部屋。送る条件（トークン・部屋・環境）は例外の知らせと同じで、同じキーは `notice_throttle_seconds` に 1 回だけ送る。行と枠（`code`）は文言と同じ規則で伏せて逃がすが、氏名のような形の無い個人情報は伏せられないので入れない。IP やログイン ID も入れず、「laravel.log を見る」と案内する。地の文の行が値の書き出しの形（`=>`・JSON・serialize など）を含むなら、その行は「（値の書き出しを含むので省いた。ログを見る）」になる。
 
 ```php
 app(\Ad5\RichPhpChatwork\Reporter::class)->notice('ログインの失敗が多い', ['直近 10 分の失敗: 52 回', 'IP やログイン ID は laravel.log を見る'], 'signin:all');
